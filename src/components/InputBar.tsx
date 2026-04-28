@@ -151,7 +151,7 @@ export default function InputBar() {
   const dragCounter = useRef(0)
   const isMobile = useIsMobile()
 
-  const canSubmit = prompt.trim() && settings.apiKey
+  const canSubmit = Boolean(prompt.trim()) && (settings.generationMode === 'server' || Boolean(settings.apiKey))
   const atImageLimit = inputImages.length >= API_MAX_IMAGES
   const maskTargetImage = maskDraft
     ? inputImages.find((img) => img.id === maskDraft.targetImageId) ?? null
@@ -931,16 +931,16 @@ export default function InputBar() {
                   onMouseEnter={() => setSubmitHover(true)}
                   onMouseLeave={() => setSubmitHover(false)}
                 >
-                  <ButtonTooltip visible={!settings.apiKey && submitHover} text="尚未完成 API 配置，请在右上角设置中进行" />
+                  <ButtonTooltip visible={settings.generationMode === 'direct' && !settings.apiKey && submitHover} text="尚未完成 API 配置，请在右上角设置中进行" />
                   <button
-                    onClick={() => settings.apiKey ? submitTask() : setShowSettings(true)}
-                    disabled={settings.apiKey ? !canSubmit : false}
+                    onClick={() => (settings.generationMode === 'server' || settings.apiKey) ? submitTask() : setShowSettings(true)}
+                    disabled={(settings.generationMode === 'server' || settings.apiKey) ? !canSubmit : false}
                     className={`p-2.5 rounded-xl transition-all shadow-sm hover:shadow ${
-                      !settings.apiKey
+                      settings.generationMode === 'direct' && !settings.apiKey
                         ? 'bg-gray-300 dark:bg-white/[0.06] text-white cursor-pointer'
                         : 'bg-blue-500 text-white hover:bg-blue-600 disabled:bg-gray-300 dark:disabled:bg-white/[0.04] disabled:opacity-50 disabled:cursor-not-allowed'
                     }`}
-                    title={settings.apiKey ? (maskDraft ? '遮罩编辑 (Ctrl+Enter)' : '生成 (Ctrl+Enter)') : '请先配置 API'}
+                    title={(settings.generationMode === 'server' || settings.apiKey) ? (maskDraft ? '遮罩编辑 (Ctrl+Enter)' : '生成 (Ctrl+Enter)') : '请先配置 API'}
                   >
                     <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7l5 5m0 0l-5 5m5-5H6" />
@@ -994,12 +994,12 @@ export default function InputBar() {
                   onMouseEnter={() => setSubmitHover(true)}
                   onMouseLeave={() => setSubmitHover(false)}
                 >
-                  <ButtonTooltip visible={!settings.apiKey && submitHover} text="尚未完成 API 配置，请在右上角设置中进行" />
+                  <ButtonTooltip visible={settings.generationMode === 'direct' && !settings.apiKey && submitHover} text="尚未完成 API 配置，请在右上角设置中进行" />
                   <button
-                    onClick={() => settings.apiKey ? submitTask() : setShowSettings(true)}
-                    disabled={settings.apiKey ? !canSubmit : false}
+                    onClick={() => (settings.generationMode === 'server' || settings.apiKey) ? submitTask() : setShowSettings(true)}
+                    disabled={(settings.generationMode === 'server' || settings.apiKey) ? !canSubmit : false}
                     className={`w-full flex items-center justify-center gap-2 py-2.5 rounded-xl text-sm font-medium transition-all shadow-sm ${
-                      !settings.apiKey
+                      settings.generationMode === 'direct' && !settings.apiKey
                         ? 'bg-gray-300 dark:bg-white/[0.06] text-white cursor-pointer'
                         : 'bg-blue-500 text-white hover:bg-blue-600 disabled:bg-gray-300 dark:disabled:bg-white/[0.04] disabled:opacity-50 disabled:cursor-not-allowed'
                     }`}

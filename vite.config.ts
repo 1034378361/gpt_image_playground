@@ -30,8 +30,13 @@ export default defineConfig(({ command }) => {
     server: {
       host: true,
       proxy:
-        devProxyConfig?.enabled
-          ? {
+        {
+          '/api': {
+            target: process.env.VITE_BACKEND_PROXY_TARGET || 'http://127.0.0.1:8000',
+            changeOrigin: true,
+          },
+          ...(devProxyConfig?.enabled
+            ? {
               [devProxyConfig.prefix]: {
                 target: devProxyConfig.target,
                 changeOrigin: devProxyConfig.changeOrigin,
@@ -43,7 +48,8 @@ export default defineConfig(({ command }) => {
                   ),
               },
             }
-          : undefined,
+            : {}),
+        },
     },
   }
 })

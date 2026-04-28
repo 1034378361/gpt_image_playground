@@ -1,6 +1,8 @@
 // ===== 设置 =====
 
 export type ApiMode = 'images' | 'responses'
+export type StorageMode = 'local' | 'server'
+export type GenerationMode = 'direct' | 'server'
 
 export interface AppSettings {
   baseUrl: string
@@ -9,6 +11,9 @@ export interface AppSettings {
   timeout: number
   apiMode: ApiMode
   codexCli: boolean
+  backendUrl: string
+  storageMode: StorageMode
+  generationMode: GenerationMode
 }
 
 const DEFAULT_BASE_URL = import.meta.env.VITE_DEFAULT_API_URL?.trim() || 'https://api.openai.com/v1'
@@ -22,6 +27,17 @@ export const DEFAULT_SETTINGS: AppSettings = {
   timeout: 300,
   apiMode: 'images',
   codexCli: false,
+  backendUrl: '',
+  storageMode: 'local',
+  generationMode: 'direct',
+}
+
+export interface BackendUser {
+  id: string
+  username: string
+  role: string
+  createdAt: number
+  updatedAt: number
 }
 
 // ===== 任务参数 =====
@@ -146,6 +162,19 @@ export interface StoredImage {
   createdAt?: number
   /** 图片来源：用户上传 / API 生成 / 遮罩 */
   source?: 'upload' | 'generated' | 'mask'
+}
+
+export interface ServerAsset {
+  id: string
+  userId: string
+  taskId?: string | null
+  templateId?: string | null
+  type: string
+  mime: string
+  width?: number | null
+  height?: number | null
+  sizeBytes: number
+  createdAt: number
 }
 
 // ===== API 请求体 =====

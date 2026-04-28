@@ -1,6 +1,16 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
 import { normalizeBaseUrl } from '../lib/api'
-import { useStore, exportData, importData, clearAllData } from '../store'
+import {
+  useStore,
+  exportData,
+  importData,
+  clearAllData,
+  loginBackend,
+  logoutBackend,
+  registerBackend,
+  loadBackendSession,
+  syncServerData,
+} from '../store'
 import { DEFAULT_IMAGES_MODEL, DEFAULT_RESPONSES_MODEL, DEFAULT_SETTINGS, type AppSettings } from '../types'
 import { useCloseOnEscape } from '../hooks/useCloseOnEscape'
 import Select from './Select'
@@ -10,11 +20,15 @@ export default function SettingsModal() {
   const setShowSettings = useStore((s) => s.setShowSettings)
   const settings = useStore((s) => s.settings)
   const setSettings = useStore((s) => s.setSettings)
+  const backendUser = useStore((s) => s.backendUser)
   const setConfirmDialog = useStore((s) => s.setConfirmDialog)
   const importInputRef = useRef<HTMLInputElement>(null)
   const [draft, setDraft] = useState<AppSettings>(settings)
   const [timeoutInput, setTimeoutInput] = useState(String(settings.timeout))
   const [showApiKey, setShowApiKey] = useState(false)
+  const [backendUsername, setBackendUsername] = useState('')
+  const [backendPassword, setBackendPassword] = useState('')
+  const [backendBusy, setBackendBusy] = useState(false)
 
   const getDefaultModelForMode = (apiMode: AppSettings['apiMode']) =>
     apiMode === 'responses' ? DEFAULT_RESPONSES_MODEL : DEFAULT_IMAGES_MODEL
@@ -36,6 +50,9 @@ export default function SettingsModal() {
       apiKey: nextDraft.apiKey,
       model: nextDraft.model.trim() || defaultModel,
       timeout: Number(nextDraft.timeout) || DEFAULT_SETTINGS.timeout,
+      backendUrl: nextDraft.backendUrl.trim(),
+      storageMode: nextDraft.storageMode === 'server' ? 'server' : DEFAULT_SETTINGS.storageMode,
+      generationMode: nextDraft.generationMode === 'server' ? 'server' : DEFAULT_SETTINGS.generationMode,
     }
     setDraft(normalizedDraft)
     setSettings(normalizedDraft)
@@ -69,6 +86,16 @@ export default function SettingsModal() {
     const file = e.target.files?.[0]
     if (file) importData(file)
     e.target.value = ''
+  }
+
+  const runBackendAction = async (action: () => Promise<void>) => {
+    setBackendBusy(true)
+    try {
+      await action()
+      setBackendPassword('')
+    } finally {
+      setBackendBusy(false)
+    }
   }
 
   return (
@@ -239,6 +266,133 @@ export default function SettingsModal() {
                   className="w-full rounded-xl border border-gray-200/70 bg-white/60 px-3 py-2 text-sm text-gray-700 outline-none transition focus:border-blue-300 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200 dark:focus:border-blue-500/50"
                 />
               </label>
+            </div>
+          </section>
+
+          <section className="pt-6 border-t border-gray-100 dark:border-white/[0.08]">
+            <h4 className="mb-4 text-sm font-medium text-gray-800 dark:text-gray-200 flex items-center gap-1.5">
+              <svg className="w-4 h-4 text-gray-400 dark:text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6l4 2m6-2a10 10 0 1 1-20 0 10 10 0 0 1 20 0z" />
+              </svg>
+              后端与账户
+            </h4>
+            <div className="space-y-4">
+              <label className="block">
+                <span className="block text-xs text-gray-500 dark:text-gray-400 mb-1">后端地址</span>
+                <input
+                  value={draft.backendUrl}
+                  onChange={(e) => setDraft((prev) => ({ ...prev, backendUrl: e.target.value }))}
+                  onBlur={(e) => commitSettings({ ...draft, backendUrl: e.target.value })}
+                  type="text"
+                  placeholder="留空使用同源 /api"
+                  className="w-full rounded-xl border border-gray-200/70 bg-white/60 px-3 py-2 text-sm text-gray-700 outline-none transition focus:border-blue-300 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200 dark:focus:border-blue-500/50"
+                />
+              </label>
+
+              <div className="grid grid-cols-2 gap-2">
+                <label className="block">
+                  <span className="block text-xs text-gray-500 dark:text-gray-400 mb-1">模板/任务数据</span>
+                  <Select
+                    value={draft.storageMode}
+                    onChange={(value) => {
+                      const nextDraft = { ...draft, storageMode: value as AppSettings['storageMode'] }
+                      setDraft(nextDraft)
+                      commitSettings(nextDraft)
+                      if (value === 'server') void loadBackendSession()
+                    }}
+                    options={[
+                      { label: '本地 IndexedDB', value: 'local' },
+                      { label: '后端同步', value: 'server' },
+                    ]}
+                    className="w-full rounded-xl border border-gray-200/70 bg-white/60 px-3 py-2 text-sm text-gray-700 outline-none transition focus:border-blue-300 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200 dark:focus:border-blue-500/50"
+                  />
+                </label>
+                <label className="block">
+                  <span className="block text-xs text-gray-500 dark:text-gray-400 mb-1">生图请求</span>
+                  <Select
+                    value={draft.generationMode}
+                    onChange={(value) => {
+                      const nextDraft = { ...draft, generationMode: value as AppSettings['generationMode'] }
+                      setDraft(nextDraft)
+                      commitSettings(nextDraft)
+                      if (value === 'server') void loadBackendSession()
+                    }}
+                    options={[
+                      { label: '前端直连', value: 'direct' },
+                      { label: '后端代理', value: 'server' },
+                    ]}
+                    className="w-full rounded-xl border border-gray-200/70 bg-white/60 px-3 py-2 text-sm text-gray-700 outline-none transition focus:border-blue-300 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200 dark:focus:border-blue-500/50"
+                  />
+                </label>
+              </div>
+
+              {backendUser ? (
+                <div className="rounded-xl border border-green-200/70 bg-green-50/70 p-3 dark:border-green-400/20 dark:bg-green-500/10">
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-medium text-green-700 dark:text-green-300">
+                        已登录：{backendUser.username}
+                      </p>
+                      <p className="mt-0.5 text-xs text-green-600/80 dark:text-green-300/70">
+                        后端模板和代理生图会按此用户隔离
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => runBackendAction(logoutBackend)}
+                      disabled={backendBusy}
+                      className="rounded-lg bg-white/80 px-3 py-1.5 text-sm text-green-700 hover:bg-white disabled:opacity-50 dark:bg-white/[0.08] dark:text-green-300 dark:hover:bg-white/[0.12]"
+                    >
+                      退出
+                    </button>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => runBackendAction(syncServerData)}
+                    disabled={backendBusy}
+                    className="mt-3 w-full rounded-lg bg-green-600 px-3 py-2 text-sm font-medium text-white hover:bg-green-700 disabled:opacity-50"
+                  >
+                    同步后端数据
+                  </button>
+                </div>
+              ) : (
+                <div className="rounded-xl border border-gray-200/70 bg-gray-50/70 p-3 dark:border-white/[0.08] dark:bg-white/[0.03]">
+                  <div className="grid grid-cols-1 gap-2">
+                    <input
+                      value={backendUsername}
+                      onChange={(e) => setBackendUsername(e.target.value)}
+                      type="text"
+                      placeholder="用户名"
+                      className="rounded-xl border border-gray-200/70 bg-white/80 px-3 py-2 text-sm text-gray-700 outline-none transition focus:border-blue-300 dark:border-white/[0.08] dark:bg-white/[0.04] dark:text-gray-200"
+                    />
+                    <input
+                      value={backendPassword}
+                      onChange={(e) => setBackendPassword(e.target.value)}
+                      type="password"
+                      placeholder="密码（至少 8 位）"
+                      className="rounded-xl border border-gray-200/70 bg-white/80 px-3 py-2 text-sm text-gray-700 outline-none transition focus:border-blue-300 dark:border-white/[0.08] dark:bg-white/[0.04] dark:text-gray-200"
+                    />
+                    <div className="flex gap-2">
+                      <button
+                        type="button"
+                        onClick={() => runBackendAction(() => loginBackend(backendUsername, backendPassword))}
+                        disabled={backendBusy || !backendUsername || !backendPassword}
+                        className="flex-1 rounded-xl bg-blue-500 px-3 py-2 text-sm font-medium text-white hover:bg-blue-600 disabled:opacity-50"
+                      >
+                        登录
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => runBackendAction(() => registerBackend(backendUsername, backendPassword))}
+                        disabled={backendBusy || !backendUsername || !backendPassword}
+                        className="flex-1 rounded-xl bg-gray-800 px-3 py-2 text-sm font-medium text-white hover:bg-gray-900 disabled:opacity-50 dark:bg-white/[0.12] dark:hover:bg-white/[0.18]"
+                      >
+                        注册
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
             </div>
           </section>
 

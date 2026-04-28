@@ -10,6 +10,7 @@ import type {
   PromptTemplate,
   PromptTemplateDraft,
   TemplateFilters,
+  BackendUser,
 } from './types'
 import { DEFAULT_SETTINGS, DEFAULT_PARAMS } from './types'
 import {
@@ -34,6 +35,7 @@ import { validateMaskMatchesImage } from './lib/canvasImage'
 import { orderInputImagesForMask } from './lib/mask'
 import { normalizeImageSize } from './lib/size'
 import { duplicateTemplateRecord, normalizeTemplateDraft } from './lib/templateUtils'
+import * as backendApi from './lib/backendApi'
 import { zipSync, unzipSync, strToU8, strFromU8 } from 'fflate'
 
 // ===== Image cache =====
@@ -61,6 +63,10 @@ interface AppState {
   // 设置
   settings: AppSettings
   setSettings: (s: Partial<AppSettings>) => void
+  backendUser: BackendUser | null
+  setBackendUser: (user: BackendUser | null) => void
+  backendReady: boolean
+  setBackendReady: (ready: boolean) => void
   dismissedCodexCliPrompts: string[]
   dismissCodexCliPrompt: (key: string) => void
 
@@ -159,8 +165,21 @@ export const useStore = create<AppState>()(
               ? s.apiMode
               : st.settings.apiMode ?? DEFAULT_SETTINGS.apiMode,
           codexCli: s.codexCli ?? st.settings.codexCli ?? DEFAULT_SETTINGS.codexCli,
+          backendUrl: s.backendUrl ?? st.settings.backendUrl ?? DEFAULT_SETTINGS.backendUrl,
+          storageMode:
+            s.storageMode === 'server' || s.storageMode === 'local'
+              ? s.storageMode
+              : st.settings.storageMode ?? DEFAULT_SETTINGS.storageMode,
+          generationMode:
+            s.generationMode === 'server' || s.generationMode === 'direct'
+              ? s.generationMode
+              : st.settings.generationMode ?? DEFAULT_SETTINGS.generationMode,
         },
       })),
+      backendUser: null,
+      setBackendUser: (backendUser) => set({ backendUser }),
+      backendReady: false,
+      setBackendReady: (backendReady) => set({ backendReady }),
       dismissedCodexCliPrompts: [],
       dismissCodexCliPrompt: (key) => set((st) => ({
         dismissedCodexCliPrompts: st.dismissedCodexCliPrompts.includes(key)
@@ -306,6 +325,11 @@ function getTemplateCoverImageIds(templates = useStore.getState().templates): st
     .filter((id): id is string => Boolean(id))
 }
 
+function isServerStorageReady(): boolean {
+  const state = useStore.getState()
+  return state.settings.storageMode === 'server' && Boolean(state.backendUser)
+}
+
 export function getCodexCliPromptKey(settings: AppSettings): string {
   return `${settings.baseUrl}\n${settings.apiKey}`
 }
@@ -355,6 +379,8 @@ export async function initStore() {
       await deleteImage(img.id)
     }
   }
+
+  await loadBackendSession({ silent: true })
 }
 
 /** 提交新任务 */
@@ -362,8 +388,14 @@ export async function submitTask(options: { allowFullMask?: boolean } = {}) {
   const { settings, prompt, inputImages, maskDraft, params, activeTemplateId, templates, showToast, setConfirmDialog } =
     useStore.getState()
 
-  if (!settings.apiKey) {
+  if (settings.generationMode === 'direct' && !settings.apiKey) {
     showToast('请先在设置中配置 API Key', 'error')
+    useStore.getState().setShowSettings(true)
+    return
+  }
+
+  if (settings.generationMode === 'server' && !useStore.getState().backendUser) {
+    showToast('请先登录后端账户', 'error')
     useStore.getState().setShowSettings(true)
     return
   }
@@ -447,7 +479,86 @@ export async function submitTask(options: { allowFullMask?: boolean } = {}) {
   }
 
   // 异步调用 API
-  executeTask(taskId)
+  if (settings.generationMode === 'server') {
+    executeServerTask(taskId)
+  } else {
+    executeTask(taskId)
+  }
+}
+
+async function executeServerTask(taskId: string) {
+  const { settings } = useStore.getState()
+  const task = useStore.getState().tasks.find((t) => t.id === taskId)
+  if (!task) return
+
+  try {
+    const inputDataUrls: string[] = []
+    for (const imgId of task.inputImageIds) {
+      const dataUrl = await ensureImageCached(imgId)
+      if (!dataUrl) throw new Error('输入图片已不存在')
+      inputDataUrls.push(dataUrl)
+    }
+    let maskDataUrl: string | undefined
+    if (task.maskImageId) {
+      maskDataUrl = await ensureImageCached(task.maskImageId)
+      if (!maskDataUrl) throw new Error('遮罩图片已不存在')
+    }
+
+    const result = await backendApi.generate(settings, {
+      taskId,
+      templateId: task.templateId,
+      templateVersionId: task.templateVersionId,
+      settings,
+      prompt: task.prompt,
+      params: task.params,
+      inputImageDataUrls: inputDataUrls,
+      maskDataUrl,
+    })
+
+    const outputIds = result.outputAssets.map((asset) => asset.id)
+    for (let i = 0; i < outputIds.length; i++) {
+      const imgId = outputIds[i]
+      const dataUrl = result.images[i]
+      if (!imgId || !dataUrl) continue
+      await putImage({ id: imgId, dataUrl, createdAt: Date.now(), source: 'generated' })
+      imageCache.set(imgId, dataUrl)
+    }
+
+    const actualParamsList = result.actualParamsList as Array<Partial<TaskParams> | undefined> | undefined
+    const actualParamsByImage = actualParamsList?.reduce<Record<string, Partial<TaskParams>>>((acc, params, index) => {
+      const imgId = outputIds[index]
+      if (imgId && params && Object.keys(params).length > 0) acc[imgId] = params
+      return acc
+    }, {})
+    const revisedPromptByImage = result.revisedPrompts?.reduce<Record<string, string>>((acc, revisedPrompt, index) => {
+      const imgId = outputIds[index]
+      if (imgId && revisedPrompt && revisedPrompt.trim()) acc[imgId] = revisedPrompt
+      return acc
+    }, {})
+
+    updateTaskInStore(taskId, {
+      outputImages: outputIds,
+      actualParams: { ...(result.actualParams as Partial<TaskParams> | null | undefined), n: outputIds.length },
+      actualParamsByImage: actualParamsByImage && Object.keys(actualParamsByImage).length > 0 ? actualParamsByImage : undefined,
+      revisedPromptByImage: revisedPromptByImage && Object.keys(revisedPromptByImage).length > 0 ? revisedPromptByImage : undefined,
+      status: 'done',
+      finishedAt: result.task.finishedAt ?? Date.now(),
+      elapsed: result.task.elapsed ?? Date.now() - task.createdAt,
+    })
+    useStore.getState().showToast(`后端生成完成，共 ${outputIds.length} 张图片`, 'success')
+  } catch (err) {
+    updateTaskInStore(taskId, {
+      status: 'error',
+      error: err instanceof Error ? err.message : String(err),
+      finishedAt: Date.now(),
+      elapsed: Date.now() - task.createdAt,
+    })
+    useStore.getState().setDetailTaskId(taskId)
+  }
+
+  for (const imgId of task.inputImageIds) {
+    imageCache.delete(imgId)
+  }
 }
 
 async function executeTask(taskId: string) {
@@ -553,10 +664,99 @@ export function updateTaskInStore(taskId: string, patch: Partial<TaskRecord>) {
   if (task) putTask(task)
 }
 
+export async function loadBackendSession(options: { silent?: boolean } = {}) {
+  const state = useStore.getState()
+  try {
+    const user = await backendApi.getMe(state.settings)
+    useStore.getState().setBackendUser(user)
+    if (state.settings.storageMode === 'server') {
+      await syncServerData()
+    }
+  } catch (err) {
+    useStore.getState().setBackendUser(null)
+    if (!options.silent) {
+      useStore.getState().showToast(`后端未登录：${err instanceof Error ? err.message : String(err)}`, 'error')
+    }
+  } finally {
+    useStore.getState().setBackendReady(true)
+  }
+}
+
+export async function loginBackend(username: string, password: string) {
+  const { settings, showToast } = useStore.getState()
+  const user = await backendApi.login(settings, username, password)
+  useStore.getState().setBackendUser(user)
+  await syncServerData()
+  showToast('登录成功', 'success')
+}
+
+export async function registerBackend(username: string, password: string) {
+  const { settings, showToast } = useStore.getState()
+  const user = await backendApi.register(settings, username, password)
+  useStore.getState().setBackendUser(user)
+  await syncServerData()
+  showToast('注册并登录成功', 'success')
+}
+
+export async function logoutBackend() {
+  const { settings, showToast } = useStore.getState()
+  await backendApi.logout(settings)
+  useStore.getState().setBackendUser(null)
+  if (settings.storageMode === 'server') {
+    useStore.getState().setTemplates([])
+    useStore.getState().setTasks([])
+  }
+  showToast('已退出登录', 'success')
+}
+
+export async function syncServerData() {
+  const { settings, backendUser, setTemplates, setTasks, showToast } = useStore.getState()
+  if (!backendUser) return
+
+  try {
+    const [templates, tasks] = await Promise.all([
+      backendApi.listTemplates(settings),
+      backendApi.listGenerations(settings),
+    ])
+
+    setTemplates(templates)
+    setTasks(tasks)
+
+    const imageIds = new Set<string>()
+    for (const template of templates) {
+      if (template.coverImageId) imageIds.add(template.coverImageId)
+    }
+    for (const task of tasks) {
+      for (const id of task.inputImageIds || []) imageIds.add(id)
+      if (task.maskImageId) imageIds.add(task.maskImageId)
+      for (const id of task.outputImages || []) imageIds.add(id)
+    }
+
+    for (const imageId of imageIds) {
+      if (imageCache.has(imageId)) continue
+      try {
+        const dataUrl = await backendApi.getAssetDataUrl(settings, imageId)
+        imageCache.set(imageId, dataUrl)
+        await putImage({ id: imageId, dataUrl, createdAt: Date.now(), source: 'generated' })
+      } catch {
+        /* Missing remote assets should not block the rest of the library. */
+      }
+    }
+  } catch (err) {
+    showToast(`同步后端数据失败：${err instanceof Error ? err.message : String(err)}`, 'error')
+  }
+}
+
 // ===== Prompt template actions =====
 
 export async function createTemplateFromDraft(draft: PromptTemplateDraft): Promise<PromptTemplate> {
   const normalized = normalizeTemplateDraft(draft)
+  if (isServerStorageReady()) {
+    const template = await backendApi.createTemplate(useStore.getState().settings, normalized)
+    useStore.getState().setTemplates([template, ...useStore.getState().templates])
+    return template
+  }
+
   const now = Date.now()
   const template: PromptTemplate = {
     ...normalized,
@@ -583,6 +783,18 @@ export async function updateTemplateInStore(
   const existing = templates.find((template) => template.id === templateId)
   if (!existing) return null
 
+  if (isServerStorageReady()) {
+    const normalizedPatch = patch.tags || patch.title || patch.description || patch.prompt || patch.model || patch.category
+      ? normalizeTemplateDraft({ ...existing, ...patch, tags: patch.tags ?? existing.tags })
+      : null
+    const serverPatch = normalizedPatch
+      ? { ...patch, ...normalizedPatch }
+      : patch
+    const updated = await backendApi.patchTemplate(useStore.getState().settings, templateId, serverPatch)
+    setTemplates(templates.map((template) => (template.id === templateId ? updated : template)))
+    return updated
+  }
+
   const updated: PromptTemplate = {
     ...existing,
     ...patch,
@@ -601,7 +813,11 @@ export async function updateTemplateInStore(
 export async function removeTemplate(templateId: string) {
   const { templates, setTemplates, selectedTemplateId, activeTemplateId, showToast } = useStore.getState()
   setTemplates(templates.filter((template) => template.id !== templateId))
-  await dbDeleteTemplate(templateId)
+  if (isServerStorageReady()) {
+    await backendApi.deleteTemplate(useStore.getState().settings, templateId)
+  } else {
+    await dbDeleteTemplate(templateId)
+  }
   if (selectedTemplateId === templateId) useStore.getState().setSelectedTemplateId(null)
   if (activeTemplateId === templateId) useStore.getState().setActiveTemplateId(null)
   showToast('模板已删除', 'success')
@@ -610,6 +826,13 @@ export async function removeTemplate(templateId: string) {
 export async function duplicateTemplate(templateId: string): Promise<PromptTemplate | null> {
   const template = useStore.getState().templates.find((item) => item.id === templateId)
   if (!template) return null
+
+  if (isServerStorageReady()) {
+    const copy = await backendApi.duplicateTemplate(useStore.getState().settings, templateId)
+    useStore.getState().setTemplates([copy, ...useStore.getState().templates])
+    useStore.getState().showToast('模板已复制', 'success')
+    return copy
+  }
 
   const copy = duplicateTemplateRecord(template, genId(), Date.now())
   await putTemplate(copy)
@@ -644,7 +867,15 @@ export async function linkTaskToTemplate(templateId: string, taskId: string) {
 }
 
 export async function setTemplateCover(templateId: string, imageId: string) {
-  const updated = await updateTemplateInStore(templateId, { coverImageId: imageId })
+  const updated = isServerStorageReady()
+    ? await backendApi.setTemplateCover(useStore.getState().settings, templateId, imageId)
+      .then((template) => {
+        useStore.getState().setTemplates(
+          useStore.getState().templates.map((item) => (item.id === templateId ? template : item)),
+        )
+        return template
+      })
+    : await updateTemplateInStore(templateId, { coverImageId: imageId })
   if (updated) {
     useStore.getState().showToast('已设为模板封面', 'success')
   }
@@ -735,7 +966,11 @@ export async function removeMultipleTasks(taskIds: string[]) {
 
   setTasks(remaining)
   for (const id of taskIds) {
-    await dbDeleteTask(id)
+    if (isServerStorageReady()) {
+      await backendApi.deleteGeneration(useStore.getState().settings, id).catch(() => undefined)
+    } else {
+      await dbDeleteTask(id)
+    }
   }
 
   // 找出其他任务仍引用的图片
@@ -779,7 +1014,11 @@ export async function removeTask(task: TaskRecord) {
   // 从列表移除
   const remaining = tasks.filter((t) => t.id !== task.id)
   setTasks(remaining)
-  await dbDeleteTask(task.id)
+  if (isServerStorageReady()) {
+    await backendApi.deleteGeneration(useStore.getState().settings, task.id).catch(() => undefined)
+  } else {
+    await dbDeleteTask(task.id)
+  }
 
   // 找出其他任务仍引用的图片
   const stillUsed = new Set<string>()

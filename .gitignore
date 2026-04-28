@@ -1,3 +1,7 @@
 node_modules/
 dist/
 dev-proxy.config.json
+backend/data/
+backend/.venv/
+*.pyc
+__pycache__/
