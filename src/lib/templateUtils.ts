@@ -91,3 +91,38 @@ export function duplicateTemplateRecord(template: PromptTemplate, id: string, no
     updatedAt: now,
   }
 }
+
+export function extractTemplateVariables(...texts: Array<string | undefined | null>): string[] {
+  const seen = new Set<string>()
+  const vars: string[] = []
+  const pattern = /\{\{\s*([a-zA-Z0-9_\u4e00-\u9fa5-]+)\s*\}\}/g
+
+  for (const text of texts) {
+    if (!text) continue
+    pattern.lastIndex = 0
+    let match: RegExpExecArray | null
+    while ((match = pattern.exec(text))) {
+      const name = match[1].trim()
+      if (!name || seen.has(name)) continue
+      seen.add(name)
+      vars.push(name)
+    }
+  }
+
+  return vars
+}
+
+export function fillTemplateVariables(text: string, values: Record<string, string>): string {
+  return text.replace(/\{\{\s*([a-zA-Z0-9_\u4e00-\u9fa5-]+)\s*\}\}/g, (_, name: string) => values[name.trim()]?.trim() ?? '')
+}
+
+export function composeTemplatePrompt(template: PromptTemplate, values: Record<string, string> = {}): string {
+  const prompt = fillTemplateVariables(template.prompt, values).trim()
+  const negativePrompt = template.negativePrompt
+    ? fillTemplateVariables(template.negativePrompt, values).trim()
+    : ''
+
+  return negativePrompt
+    ? `${prompt}\n\nNegative prompt: ${negativePrompt}`
+    : prompt
+}

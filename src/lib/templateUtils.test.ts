@@ -9,6 +9,8 @@ import {
   getTemplateTags,
   normalizeTemplateDraft,
   normalizeTemplateTags,
+  extractTemplateVariables,
+  composeTemplatePrompt,
 } from './templateUtils'
 
 function template(overrides: Partial<PromptTemplate> = {}): PromptTemplate {
@@ -110,5 +112,17 @@ describe('template utilities', () => {
     expect(copy.coverImageId).toBe('image-a')
     expect(copy.version).toBe(1)
     expect(copy.createdAt).toBe(10)
+  })
+
+  it('extracts and fills template variables including negative prompt', () => {
+    const t = template({
+      prompt: 'A {{product_name}} on {{background}}',
+      negativePrompt: 'no {{background}}, no blur',
+    })
+
+    expect(extractTemplateVariables(t.prompt, t.negativePrompt)).toEqual(['product_name', 'background'])
+    expect(composeTemplatePrompt(t, { product_name: 'watch', background: 'marble' })).toBe(
+      'A watch on marble\n\nNegative prompt: no marble, no blur',
+    )
   })
 })

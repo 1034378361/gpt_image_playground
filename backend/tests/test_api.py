@@ -1,8 +1,16 @@
 from __future__ import annotations
 
+import base64
+import io
 import importlib
 
 from fastapi.testclient import TestClient
+from PIL import Image
+
+_image_buffer = io.BytesIO()
+Image.new("RGB", (1, 1), (255, 255, 255)).save(_image_buffer, format="PNG")
+PIXEL_PNG = _image_buffer.getvalue()
+PIXEL_DATA_URL = f"data:image/png;base64,{base64.b64encode(PIXEL_PNG).decode('ascii')}"
 
 
 def make_client(monkeypatch, tmp_path):
@@ -112,18 +120,74 @@ def test_asset_upload_read_delete(monkeypatch, tmp_path):
 
     upload = client.post(
         "/api/assets",
-        files={"file": ("pixel.png", b"fake-png", "image/png")},
+        files={"file": ("pixel.png", PIXEL_PNG, "image/png")},
         data={"type": "generated"},
     )
     assert upload.status_code == 200
     asset = upload.json()
     assert asset["mime"] == "image/png"
-    assert asset["sizeBytes"] == len(b"fake-png")
+    assert asset["sizeBytes"] == len(PIXEL_PNG)
+    assert asset["width"] == 1
+    assert asset["height"] == 1
+    assert asset["hasThumbnail"] is True
 
     read = client.get(f"/api/assets/{asset['id']}")
     assert read.status_code == 200
-    assert read.content == b"fake-png"
+    assert read.content == PIXEL_PNG
+
+    thumbnail = client.get(f"/api/assets/{asset['id']}/thumbnail")
+    assert thumbnail.status_code == 200
+    assert thumbnail.headers["content-type"] == "image/webp"
 
     deleted = client.delete(f"/api/assets/{asset['id']}")
     assert deleted.status_code == 200
     assert client.get(f"/api/assets/{asset['id']}").status_code == 404
+
+
+def test_async_generation_run_persists_task_assets_and_metadata(monkeypatch, tmp_path):
+    client = make_client(monkeypatch, tmp_path)
+    import backend.app.main as main
+
+    register(client)
+
+    async def fake_call_upstream(_payload):
+        return (
+            [PIXEL_DATA_URL],
+            {"size": "1024x1024", "quality": "high"},
+            [{"size": "1024x1024", "quality": "high"}],
+            ["A revised studio prompt"],
+        )
+
+    monkeypatch.setattr(main, "call_upstream", fake_call_upstream)
+
+    payload = {
+        "settings": {
+            "baseUrl": "https://example.test/v1",
+            "apiKey": "",
+            "model": "gpt-image-2",
+            "timeout": 10,
+            "apiMode": "images",
+            "codexCli": False,
+        },
+        "prompt": "A bottle on a clean white background",
+        "params": template_payload()["params"],
+        "inputImageDataUrls": [],
+        "maskDataUrl": None,
+    }
+    started = client.post("/api/generations/run", json=payload)
+    assert started.status_code == 200
+    task_id = started.json()["task"]["id"]
+    assert started.json()["task"]["status"] == "running"
+
+    task = client.get(f"/api/generations/{task_id}").json()
+    assert task["status"] == "done"
+    assert task["actualParams"]["n"] == 1
+    assert task["actualParamsByImage"]
+    assert task["revisedPromptByImage"]
+    assert len(task["outputImages"]) == 1
+
+    asset_id = task["outputImages"][0]
+    asset = client.get(f"/api/assets/{asset_id}")
+    assert asset.status_code == 200
+    assert asset.content == PIXEL_PNG
+    assert client.get(f"/api/assets/{asset_id}/thumbnail").status_code == 200

@@ -128,7 +128,11 @@ export default function ImageContextMenu() {
     if (!menuInfo.imageId || !menuInfo.templateId) return
     const { imageId, templateId } = menuInfo
     setMenuInfo(null)
-    await setTemplateCover(templateId, imageId)
+    try {
+      await setTemplateCover(templateId, imageId)
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : String(err), 'error')
+    }
   }
 
   // 保证菜单在视口内

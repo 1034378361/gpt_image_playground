@@ -28,8 +28,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
   apiMode: 'images',
   codexCli: false,
   backendUrl: '',
-  storageMode: 'local',
-  generationMode: 'direct',
+  storageMode: 'server',
+  generationMode: 'server',
 }
 
 export interface BackendUser {
@@ -174,6 +174,7 @@ export interface ServerAsset {
   width?: number | null
   height?: number | null
   sizeBytes: number
+  hasThumbnail?: boolean
   createdAt: number
 }
 

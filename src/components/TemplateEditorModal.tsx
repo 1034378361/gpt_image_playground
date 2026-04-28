@@ -143,28 +143,31 @@ export default function TemplateEditorModal() {
       isFavorite,
     })
 
-    if (editor.mode === 'edit') {
-      const updated = await updateTemplateInStore(editor.templateId, draft, { bumpVersion: true })
-      if (updated) {
-        setSelectedTemplateId(updated.id)
-        showToast('模板已更新', 'success')
-      }
-    } else if (editor.mode === 'fromTask') {
-      const task = tasks.find((item) => item.id === editor.taskId)
-      if (task) {
-        const created = await createTemplateFromTask(task, draft)
+    try {
+      if (editor.mode === 'edit') {
+        const updated = await updateTemplateInStore(editor.templateId, draft, { bumpVersion: true })
+        if (updated) {
+          setSelectedTemplateId(updated.id)
+          showToast('模板已更新', 'success')
+        }
+      } else if (editor.mode === 'fromTask') {
+        const task = tasks.find((item) => item.id === editor.taskId)
+        if (task) {
+          const created = await createTemplateFromTask(task, draft)
+          setSelectedTemplateId(created.id)
+          setCurrentView('templates')
+          showToast('已从任务保存为模板', 'success')
+        }
+      } else {
+        const created = await createTemplateFromDraft(draft)
         setSelectedTemplateId(created.id)
         setCurrentView('templates')
-        showToast('已从任务保存为模板', 'success')
+        showToast('模板已保存', 'success')
       }
-    } else {
-      const created = await createTemplateFromDraft(draft)
-      setSelectedTemplateId(created.id)
-      setCurrentView('templates')
-      showToast('模板已保存', 'success')
+      setTemplateEditor(null)
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : String(err), 'error')
     }
-
-    setTemplateEditor(null)
   }
 
   const dialogTitle =

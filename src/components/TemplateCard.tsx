@@ -11,6 +11,7 @@ export default function TemplateCard({ template }: Props) {
   const setSelectedTemplateId = useStore((s) => s.setSelectedTemplateId)
   const setTemplateEditor = useStore((s) => s.setTemplateEditor)
   const setConfirmDialog = useStore((s) => s.setConfirmDialog)
+  const showToast = useStore((s) => s.showToast)
   const taskCount = useStore((s) =>
     s.tasks.filter((task) => task.templateId === template.id || template.linkedTaskIds.includes(task.id)).length,
   )
@@ -39,7 +40,17 @@ export default function TemplateCard({ template }: Props) {
     setConfirmDialog({
       title: '删除模板',
       message: '确定要删除这个模板吗？历史生成记录不会被删除。',
-      action: () => removeTemplate(template.id),
+      action: () => {
+        void removeTemplate(template.id).catch((err) => {
+          showToast(err instanceof Error ? err.message : String(err), 'error')
+        })
+      },
+    })
+  }
+
+  const runTemplateAction = (action: () => Promise<unknown>) => {
+    void action().catch((err) => {
+      showToast(err instanceof Error ? err.message : String(err), 'error')
     })
   }
 
@@ -89,7 +100,7 @@ export default function TemplateCard({ template }: Props) {
           <button
             onClick={(e) => {
               e.stopPropagation()
-              toggleTemplateFavorite(template.id)
+              runTemplateAction(() => toggleTemplateFavorite(template.id))
             }}
             className={`p-1.5 rounded-md transition ${
               template.isFavorite
@@ -134,7 +145,7 @@ export default function TemplateCard({ template }: Props) {
             </svg>
           </button>
           <button
-            onClick={() => duplicateTemplate(template.id)}
+            onClick={() => runTemplateAction(() => duplicateTemplate(template.id))}
             className="p-1.5 rounded-md text-gray-400 hover:text-purple-500 hover:bg-purple-50 dark:hover:bg-purple-950/30 transition"
             title="复制模板"
           >

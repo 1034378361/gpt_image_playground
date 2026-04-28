@@ -109,6 +109,10 @@ export function listGenerations(settings: AppSettings): Promise<TaskRecord[]> {
   return request(settings, '/generations')
 }
 
+export function getGeneration(settings: AppSettings, taskId: string): Promise<TaskRecord> {
+  return request(settings, `/generations/${taskId}`)
+}
+
 export function deleteGeneration(settings: AppSettings, taskId: string): Promise<{ ok: boolean }> {
   return request(settings, `/generations/${taskId}`, { method: 'DELETE' })
 }
@@ -149,6 +153,13 @@ export interface BackendGenerateResponse {
 
 export function generate(settings: AppSettings, payload: BackendGenerateRequest): Promise<BackendGenerateResponse> {
   return request(settings, '/generate', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
+export function runGeneration(settings: AppSettings, payload: BackendGenerateRequest): Promise<{ task: TaskRecord }> {
+  return request(settings, '/generations/run', {
     method: 'POST',
     body: JSON.stringify(payload),
   })

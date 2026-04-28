@@ -1,18 +1,21 @@
 from __future__ import annotations
 
 import base64
+import io
 import json
 import mimetypes
 import re
+from collections import defaultdict, deque
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 from urllib.parse import urljoin
 
 import httpx
-from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, Response, UploadFile
+from fastapi import BackgroundTasks, Depends, FastAPI, File, Form, HTTPException, Request, Response, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
+from PIL import Image, UnidentifiedImageError
 from pydantic import ValidationError
 
 from .config import settings
@@ -22,6 +25,7 @@ from .schemas import (
     AuthIn,
     GenerateIn,
     GenerateOut,
+    GenerateRunOut,
     GenerationTaskIn,
     GenerationTaskOut,
     GenerationTaskPatch,
@@ -34,6 +38,9 @@ from .schemas import (
 )
 from .security import create_session_token, hash_password, new_id, now_ms, verify_password
 
+LOGIN_ATTEMPTS: dict[str, deque[int]] = defaultdict(deque)
+ALLOWED_IMAGE_MIMES = {"image/png", "image/jpeg", "image/webp"}
+
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     init_db()
@@ -44,7 +51,7 @@ app = FastAPI(title="GPT Image Playground API", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://127.0.0.1:5173", "http://localhost:5173"],
+    allow_origins=settings.cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -121,6 +128,9 @@ def row_to_task(row: Any) -> GenerationTaskOut:
         params=TaskParams.model_validate(json_loads(row["params_json"], {})),
         inputImageIds=json_loads(row["input_image_ids_json"], []),
         outputImages=json_loads(row["output_image_ids_json"], []),
+        actualParams=json_loads(row["actual_params_json"], None),
+        actualParamsByImage=json_loads(row["actual_params_by_image_json"], None),
+        revisedPromptByImage=json_loads(row["revised_prompt_by_image_json"], None),
         status=row["status"],
         error=row["error"],
         createdAt=row["created_at"],
@@ -143,6 +153,7 @@ def row_to_asset(row: Any) -> AssetOut:
         width=row["width"],
         height=row["height"],
         sizeBytes=row["size_bytes"],
+        hasThumbnail=bool(row["thumbnail_path"]),
         createdAt=row["created_at"],
     )
 
@@ -152,14 +163,15 @@ def require_user(request: Request) -> UserOut:
     if not token:
         raise HTTPException(status_code=401, detail="Not authenticated")
 
+    ts = now_ms()
     with get_conn() as conn:
         row = conn.execute(
             """
             SELECT users.* FROM sessions
             JOIN users ON users.id = sessions.user_id
-            WHERE sessions.id = ?
+            WHERE sessions.id = ? AND (sessions.expires_at IS NULL OR sessions.expires_at > ?)
             """,
-            (token,),
+            (token, ts),
         ).fetchone()
     if not row:
         raise HTTPException(status_code=401, detail="Not authenticated")
@@ -173,8 +185,28 @@ def set_session_cookie(response: Response, token: str) -> None:
         httponly=True,
         secure=settings.session_secure,
         samesite="lax",
+        max_age=settings.session_ttl_seconds,
         path="/",
     )
+
+
+def assert_auth_not_rate_limited(username: str) -> None:
+    key = username.lower()
+    window_ms = 15 * 60 * 1000
+    now = now_ms()
+    attempts = LOGIN_ATTEMPTS[key]
+    while attempts and attempts[0] < now - window_ms:
+        attempts.popleft()
+    if len(attempts) >= 8:
+        raise HTTPException(status_code=429, detail="Too many login attempts, please try again later")
+
+
+def record_failed_auth(username: str) -> None:
+    LOGIN_ATTEMPTS[username.lower()].append(now_ms())
+
+
+def clear_failed_auth(username: str) -> None:
+    LOGIN_ATTEMPTS.pop(username.lower(), None)
 
 
 @app.post("/api/auth/register", response_model=UserOut)
@@ -185,6 +217,7 @@ def register(payload: AuthIn, response: Response) -> UserOut:
 
     user_id = new_id()
     ts = now_ms()
+    expires_at = ts + settings.session_ttl_seconds * 1000
     password_hash = hash_password(payload.password)
     token = create_session_token()
 
@@ -198,8 +231,8 @@ def register(payload: AuthIn, response: Response) -> UserOut:
                 (user_id, username, password_hash, ts, ts),
             )
             conn.execute(
-                "INSERT INTO sessions (id, user_id, created_at, expires_at) VALUES (?, ?, ?, NULL)",
-                (token, user_id, ts),
+                "INSERT INTO sessions (id, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)",
+                (token, user_id, ts, expires_at),
             )
             row = conn.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
     except Exception as exc:
@@ -214,17 +247,22 @@ def register(payload: AuthIn, response: Response) -> UserOut:
 @app.post("/api/auth/login", response_model=UserOut)
 def login(payload: AuthIn, response: Response) -> UserOut:
     username = payload.username.strip()
+    assert_auth_not_rate_limited(username)
     with get_conn() as conn:
         row = conn.execute("SELECT * FROM users WHERE username = ?", (username,)).fetchone()
         if not row or not verify_password(payload.password, row["password_hash"]):
+            record_failed_auth(username)
             raise HTTPException(status_code=401, detail="Invalid username or password")
 
         token = create_session_token()
+        ts = now_ms()
+        expires_at = ts + settings.session_ttl_seconds * 1000
         conn.execute(
-            "INSERT INTO sessions (id, user_id, created_at, expires_at) VALUES (?, ?, ?, NULL)",
-            (token, row["id"], now_ms()),
+            "INSERT INTO sessions (id, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)",
+            (token, row["id"], ts, expires_at),
         )
 
+    clear_failed_auth(username)
     set_session_cookie(response, token)
     return row_to_user(row)
 
@@ -406,9 +444,10 @@ def insert_generation(payload: GenerationTaskIn, user_id: str) -> GenerationTask
             """
             INSERT OR REPLACE INTO generation_tasks (
               id, user_id, template_id, template_version_id, prompt, params_json,
-              input_image_ids_json, output_image_ids_json, status, error, created_at,
+              input_image_ids_json, output_image_ids_json, actual_params_json,
+              actual_params_by_image_json, revised_prompt_by_image_json, status, error, created_at,
               finished_at, elapsed, is_favorite, api_mode, model
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 task_id,
@@ -419,6 +458,9 @@ def insert_generation(payload: GenerationTaskIn, user_id: str) -> GenerationTask
                 payload.params.model_dump_json(),
                 json_dumps(payload.inputImageIds),
                 json_dumps(payload.outputImages),
+                json_dumps(payload.actualParams) if payload.actualParams is not None else None,
+                json_dumps(payload.actualParamsByImage) if payload.actualParamsByImage is not None else None,
+                json_dumps(payload.revisedPromptByImage) if payload.revisedPromptByImage is not None else None,
                 payload.status,
                 payload.error,
                 created_at,
@@ -462,7 +504,8 @@ def patch_generation(task_id: str, payload: GenerationTaskPatch, user: UserOut =
             """
             UPDATE generation_tasks SET
               template_id = ?, template_version_id = ?, prompt = ?, params_json = ?,
-              input_image_ids_json = ?, output_image_ids_json = ?, status = ?, error = ?,
+              input_image_ids_json = ?, output_image_ids_json = ?, actual_params_json = ?,
+              actual_params_by_image_json = ?, revised_prompt_by_image_json = ?, status = ?, error = ?,
               finished_at = ?, elapsed = ?, is_favorite = ?
             WHERE id = ? AND user_id = ?
             """,
@@ -473,6 +516,9 @@ def patch_generation(task_id: str, payload: GenerationTaskPatch, user: UserOut =
                 next_task.params.model_dump_json(),
                 json_dumps(next_task.inputImageIds),
                 json_dumps(next_task.outputImages),
+                json_dumps(next_task.actualParams) if next_task.actualParams is not None else None,
+                json_dumps(next_task.actualParamsByImage) if next_task.actualParamsByImage is not None else None,
+                json_dumps(next_task.revisedPromptByImage) if next_task.revisedPromptByImage is not None else None,
                 next_task.status,
                 next_task.error,
                 next_task.finishedAt,
@@ -515,6 +561,27 @@ def bytes_to_data_url(mime: str, data: bytes) -> str:
     return f"data:{mime};base64,{base64.b64encode(data).decode('ascii')}"
 
 
+def inspect_image(data: bytes, mime: str) -> tuple[int | None, int | None, bytes | None, str]:
+    if mime not in ALLOWED_IMAGE_MIMES:
+        raise HTTPException(status_code=400, detail="Only PNG, JPEG, and WebP images are allowed")
+    if len(data) > settings.max_upload_bytes:
+        raise HTTPException(status_code=413, detail="Image is too large")
+
+    try:
+        with Image.open(io.BytesIO(data)) as image:
+            detected_mime = Image.MIME.get(image.format or "", mime)
+            if detected_mime not in ALLOWED_IMAGE_MIMES:
+                raise HTTPException(status_code=400, detail="Only PNG, JPEG, and WebP images are allowed")
+            width, height = image.size
+            thumb = image.copy()
+            thumb.thumbnail((settings.thumbnail_max_size, settings.thumbnail_max_size))
+            output = io.BytesIO()
+            thumb.convert("RGB" if thumb.mode not in ("RGB", "RGBA") else thumb.mode).save(output, format="WEBP", quality=82)
+            return width, height, output.getvalue(), detected_mime
+    except (UnidentifiedImageError, OSError) as exc:
+        raise HTTPException(status_code=400, detail="Invalid image file") from exc
+
+
 def save_asset_bytes(
     *,
     user_id: str,
@@ -524,20 +591,37 @@ def save_asset_bytes(
     task_id: str | None = None,
     template_id: str | None = None,
 ) -> AssetOut:
+    width, height, thumbnail_data, detected_mime = inspect_image(data, mime)
     asset_id = new_id()
     created_at = now_ms()
     user_dir = settings.asset_dir / user_id
     user_dir.mkdir(parents=True, exist_ok=True)
-    path = user_dir / f"{asset_id}{asset_ext(mime)}"
+    path = user_dir / f"{asset_id}{asset_ext(detected_mime)}"
+    thumbnail_path = user_dir / f"{asset_id}.thumb.webp"
     path.write_bytes(data)
+    if thumbnail_data:
+        thumbnail_path.write_bytes(thumbnail_data)
 
     with get_conn() as conn:
         conn.execute(
             """
-            INSERT INTO assets (id, user_id, task_id, template_id, type, path, mime, width, height, size_bytes, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?)
+            INSERT INTO assets (id, user_id, task_id, template_id, type, path, thumbnail_path, mime, width, height, size_bytes, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            (asset_id, user_id, task_id, template_id, asset_type, str(path), mime, len(data), created_at),
+            (
+                asset_id,
+                user_id,
+                task_id,
+                template_id,
+                asset_type,
+                str(path),
+                str(thumbnail_path) if thumbnail_data else None,
+                detected_mime,
+                width,
+                height,
+                len(data),
+                created_at,
+            ),
         )
         row = conn.execute("SELECT * FROM assets WHERE id = ? AND user_id = ?", (asset_id, user_id)).fetchone()
     return row_to_asset(row)
@@ -565,6 +649,15 @@ def get_asset(asset_id: str, user: UserOut = Depends(require_user)) -> FileRespo
     return FileResponse(row["path"], media_type=row["mime"])
 
 
+@app.get("/api/assets/{asset_id}/thumbnail")
+def get_asset_thumbnail(asset_id: str, user: UserOut = Depends(require_user)) -> FileResponse:
+    with get_conn() as conn:
+        row = conn.execute("SELECT * FROM assets WHERE id = ? AND user_id = ?", (asset_id, user.id)).fetchone()
+    if not row or not row["thumbnail_path"]:
+        raise HTTPException(status_code=404, detail="Asset thumbnail not found")
+    return FileResponse(row["thumbnail_path"], media_type="image/webp")
+
+
 @app.delete("/api/assets/{asset_id}")
 def delete_asset(asset_id: str, user: UserOut = Depends(require_user)) -> dict[str, bool]:
     with get_conn() as conn:
@@ -576,6 +669,9 @@ def delete_asset(asset_id: str, user: UserOut = Depends(require_user)) -> dict[s
     path = Path(row["path"])
     if path.exists():
         path.unlink()
+    thumbnail_path = Path(row["thumbnail_path"]) if row["thumbnail_path"] else None
+    if thumbnail_path and thumbnail_path.exists():
+        thumbnail_path.unlink()
     return {"ok": True}
 
 
@@ -724,28 +820,55 @@ async def call_upstream(payload: GenerateIn) -> tuple[list[str], dict[str, Any] 
         return images, actual_params, [actual_params for _ in images], revised_prompts
 
 
-@app.post("/api/generate", response_model=GenerateOut)
-async def generate(payload: GenerateIn, user: UserOut = Depends(require_user)) -> GenerateOut:
-    task_id = payload.taskId or new_id()
-    started_at = now_ms()
-    task = insert_generation(
-        GenerationTaskIn(
-            id=task_id,
-            templateId=payload.templateId,
-            templateVersionId=payload.templateVersionId,
-            prompt=payload.prompt,
-            params=payload.params,
-            inputImageIds=[],
-            outputImages=[],
-            status="running",
-            createdAt=started_at,
-            apiMode=payload.settings.apiMode,
-            model=payload.settings.model,
-        ),
-        user.id,
-    )
+def map_actual_params_by_image(
+    output_ids: list[str],
+    actual_params_list: list[dict[str, Any] | None],
+) -> dict[str, dict[str, Any]] | None:
+    mapped = {
+        output_ids[index]: params
+        for index, params in enumerate(actual_params_list)
+        if index < len(output_ids) and params
+    }
+    return mapped or None
 
+
+def map_revised_prompts_by_image(output_ids: list[str], revised_prompts: list[str | None]) -> dict[str, str] | None:
+    mapped = {
+        output_ids[index]: prompt
+        for index, prompt in enumerate(revised_prompts)
+        if index < len(output_ids) and prompt
+    }
+    return mapped or None
+
+
+async def complete_generation_task(payload: GenerateIn, user: UserOut, started_at: int) -> GenerateOut:
+    task_id = payload.taskId or new_id()
     try:
+        input_asset_ids: list[str] = []
+        for data_url in payload.inputImageDataUrls:
+            mime, data = data_url_to_bytes(data_url)
+            asset = save_asset_bytes(
+                user_id=user.id,
+                data=data,
+                mime=mime,
+                asset_type="input",
+                task_id=task_id,
+                template_id=payload.templateId,
+            )
+            input_asset_ids.append(asset.id)
+        if payload.maskDataUrl:
+            mime, data = data_url_to_bytes(payload.maskDataUrl)
+            save_asset_bytes(
+                user_id=user.id,
+                data=data,
+                mime=mime,
+                asset_type="mask",
+                task_id=task_id,
+                template_id=payload.templateId,
+            )
+        if input_asset_ids:
+            patch_generation(task_id, GenerationTaskPatch(inputImageIds=input_asset_ids), user)
+
         images, actual_params, actual_params_list, revised_prompts = await call_upstream(payload)
         output_assets: list[AssetOut] = []
         for data_url in images:
@@ -766,6 +889,9 @@ async def generate(payload: GenerateIn, user: UserOut = Depends(require_user)) -
             task_id,
             GenerationTaskPatch(
                 outputImages=output_ids,
+                actualParams={**actual_params, "n": len(output_ids)} if actual_params else {"n": len(output_ids)},
+                actualParamsByImage=map_actual_params_by_image(output_ids, actual_params_list),
+                revisedPromptByImage=map_revised_prompts_by_image(output_ids, revised_prompts),
                 status="done",
                 finishedAt=finished_at,
                 elapsed=finished_at - started_at,
@@ -780,11 +906,77 @@ async def generate(payload: GenerateIn, user: UserOut = Depends(require_user)) -
             actualParamsList=actual_params_list,
             revisedPrompts=revised_prompts,
         )
-    except (httpx.HTTPError, ValueError, ValidationError) as exc:
+    except (httpx.HTTPError, ValueError, ValidationError, HTTPException) as exc:
         finished_at = now_ms()
         patch_generation(
             task_id,
             GenerationTaskPatch(status="error", error=str(exc), finishedAt=finished_at, elapsed=finished_at - started_at),
             user,
         )
+        raise
+
+
+async def complete_generation_task_safely(payload: GenerateIn, user: UserOut, started_at: int) -> None:
+    try:
+        await complete_generation_task(payload, user, started_at)
+    except Exception as exc:
+        if payload.taskId:
+            finished_at = now_ms()
+            patch_generation(
+                payload.taskId,
+                GenerationTaskPatch(status="error", error=str(exc), finishedAt=finished_at, elapsed=finished_at - started_at),
+                user,
+            )
+        return
+
+
+@app.post("/api/generations/run", response_model=GenerateRunOut)
+async def run_generation(payload: GenerateIn, background_tasks: BackgroundTasks, user: UserOut = Depends(require_user)) -> GenerateRunOut:
+    task_id = payload.taskId or new_id()
+    payload = payload.model_copy(update={"taskId": task_id})
+    started_at = now_ms()
+    task = insert_generation(
+        GenerationTaskIn(
+            id=task_id,
+            templateId=payload.templateId,
+            templateVersionId=payload.templateVersionId,
+            prompt=payload.prompt,
+            params=payload.params,
+            inputImageIds=[],
+            outputImages=[],
+            status="running",
+            createdAt=started_at,
+            apiMode=payload.settings.apiMode,
+            model=payload.settings.model,
+        ),
+        user.id,
+    )
+    background_tasks.add_task(complete_generation_task_safely, payload, user, started_at)
+    return GenerateRunOut(task=task)
+
+
+@app.post("/api/generate", response_model=GenerateOut)
+async def generate(payload: GenerateIn, user: UserOut = Depends(require_user)) -> GenerateOut:
+    task_id = payload.taskId or new_id()
+    payload = payload.model_copy(update={"taskId": task_id})
+    started_at = now_ms()
+    insert_generation(
+        GenerationTaskIn(
+            id=task_id,
+            templateId=payload.templateId,
+            templateVersionId=payload.templateVersionId,
+            prompt=payload.prompt,
+            params=payload.params,
+            inputImageIds=[],
+            outputImages=[],
+            status="running",
+            createdAt=started_at,
+            apiMode=payload.settings.apiMode,
+            model=payload.settings.model,
+        ),
+        user.id,
+    )
+    try:
+        return await complete_generation_task(payload, user, started_at)
+    except (httpx.HTTPError, ValueError, ValidationError, HTTPException) as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc

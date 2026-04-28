@@ -80,6 +80,9 @@ class GenerationTaskIn(BaseModel):
     params: TaskParams
     inputImageIds: list[str] = Field(default_factory=list)
     outputImages: list[str] = Field(default_factory=list)
+    actualParams: dict[str, Any] | None = None
+    actualParamsByImage: dict[str, dict[str, Any]] | None = None
+    revisedPromptByImage: dict[str, str] | None = None
     status: TaskStatus = "done"
     error: str | None = None
     createdAt: int | None = None
@@ -97,6 +100,9 @@ class GenerationTaskPatch(BaseModel):
     params: TaskParams | None = None
     inputImageIds: list[str] | None = None
     outputImages: list[str] | None = None
+    actualParams: dict[str, Any] | None = None
+    actualParamsByImage: dict[str, dict[str, Any]] | None = None
+    revisedPromptByImage: dict[str, str] | None = None
     status: TaskStatus | None = None
     error: str | None = None
     finishedAt: int | None = None
@@ -113,6 +119,9 @@ class GenerationTaskOut(BaseModel):
     params: TaskParams
     inputImageIds: list[str]
     outputImages: list[str]
+    actualParams: dict[str, Any] | None = None
+    actualParamsByImage: dict[str, dict[str, Any]] | None = None
+    revisedPromptByImage: dict[str, str] | None = None
     status: TaskStatus
     error: str | None = None
     createdAt: int
@@ -133,6 +142,7 @@ class AssetOut(BaseModel):
     width: int | None = None
     height: int | None = None
     sizeBytes: int
+    hasThumbnail: bool = False
     createdAt: int
 
 
@@ -163,3 +173,7 @@ class GenerateOut(BaseModel):
     actualParams: dict[str, Any] | None = None
     actualParamsList: list[dict[str, Any] | None] | None = None
     revisedPrompts: list[str | None] | None = None
+
+
+class GenerateRunOut(BaseModel):
+    task: GenerationTaskOut

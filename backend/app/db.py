@@ -84,6 +84,9 @@ def init_db(conn: sqlite3.Connection | None = None) -> None:
               params_json TEXT NOT NULL,
               input_image_ids_json TEXT NOT NULL DEFAULT '[]',
               output_image_ids_json TEXT NOT NULL DEFAULT '[]',
+              actual_params_json TEXT,
+              actual_params_by_image_json TEXT,
+              revised_prompt_by_image_json TEXT,
               status TEXT NOT NULL,
               error TEXT,
               created_at INTEGER NOT NULL,
@@ -104,6 +107,7 @@ def init_db(conn: sqlite3.Connection | None = None) -> None:
               template_id TEXT REFERENCES prompt_templates(id) ON DELETE SET NULL,
               type TEXT NOT NULL,
               path TEXT NOT NULL,
+              thumbnail_path TEXT,
               mime TEXT NOT NULL,
               width INTEGER,
               height INTEGER,
@@ -115,7 +119,17 @@ def init_db(conn: sqlite3.Connection | None = None) -> None:
               ON assets(user_id, created_at DESC);
             """
         )
+        ensure_column(db, "generation_tasks", "actual_params_json", "TEXT")
+        ensure_column(db, "generation_tasks", "actual_params_by_image_json", "TEXT")
+        ensure_column(db, "generation_tasks", "revised_prompt_by_image_json", "TEXT")
+        ensure_column(db, "assets", "thumbnail_path", "TEXT")
         db.commit()
     finally:
         if owns_conn:
             db.close()
+
+
+def ensure_column(conn: sqlite3.Connection, table: str, column: str, declaration: str) -> None:
+    existing = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+    if column not in existing:
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {declaration}")

@@ -12,6 +12,7 @@ export default function TemplateDetailModal() {
   const setCurrentView = useStore((s) => s.setCurrentView)
   const setDetailTaskId = useStore((s) => s.setDetailTaskId)
   const setLightboxImageId = useStore((s) => s.setLightboxImageId)
+  const showToast = useStore((s) => s.showToast)
 
   const template = useMemo(
     () => templates.find((item) => item.id === selectedTemplateId) ?? null,
@@ -70,7 +71,17 @@ export default function TemplateDetailModal() {
     setConfirmDialog({
       title: '删除模板',
       message: '确定要删除这个模板吗？历史生成记录不会被删除。',
-      action: () => removeTemplate(template.id),
+      action: () => {
+        void removeTemplate(template.id).catch((err) => {
+          showToast(err instanceof Error ? err.message : String(err), 'error')
+        })
+      },
+    })
+  }
+
+  const runTemplateAction = (action: () => Promise<unknown>) => {
+    void action().catch((err) => {
+      showToast(err instanceof Error ? err.message : String(err), 'error')
     })
   }
 
@@ -187,7 +198,7 @@ export default function TemplateDetailModal() {
                           />
                         )}
                         <button
-                          onClick={() => setTemplateCover(template.id, imageId)}
+                          onClick={() => runTemplateAction(() => setTemplateCover(template.id, imageId))}
                           className="absolute inset-x-1 bottom-1 rounded bg-black/60 px-1 py-1 text-[10px] text-white opacity-0 group-hover:opacity-100 transition"
                         >
                           设为封面
@@ -234,7 +245,7 @@ export default function TemplateDetailModal() {
               编辑
             </button>
             <button
-              onClick={() => duplicateTemplate(template.id)}
+              onClick={() => runTemplateAction(() => duplicateTemplate(template.id))}
               className="col-span-2 sm:flex-1 flex items-center justify-center gap-1.5 px-3 py-2 rounded-xl bg-purple-50 dark:bg-purple-500/10 text-purple-600 dark:text-purple-400 hover:bg-purple-100 dark:hover:bg-purple-500/20 transition text-sm font-medium whitespace-nowrap"
             >
               复制
@@ -249,7 +260,7 @@ export default function TemplateDetailModal() {
               </svg>
             </button>
             <button
-              onClick={() => toggleTemplateFavorite(template.id)}
+              onClick={() => runTemplateAction(() => toggleTemplateFavorite(template.id))}
               className={`col-span-1 sm:flex-none sm:w-11 flex items-center justify-center rounded-xl transition ${
                 template.isFavorite
                   ? 'bg-yellow-50 text-yellow-500 hover:bg-yellow-100 dark:bg-yellow-500/10 dark:hover:bg-yellow-500/20'

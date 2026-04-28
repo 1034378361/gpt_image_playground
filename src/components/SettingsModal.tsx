@@ -43,7 +43,9 @@ export default function SettingsModal() {
   const commitSettings = (nextDraft: AppSettings) => {
     const apiMode = nextDraft.apiMode === 'responses' ? 'responses' : DEFAULT_SETTINGS.apiMode
     const defaultModel = getDefaultModelForMode(apiMode)
-    const normalizedDraft = {
+    const storageMode: AppSettings['storageMode'] = nextDraft.storageMode === 'server' ? 'server' : 'local'
+    const generationMode: AppSettings['generationMode'] = nextDraft.generationMode === 'server' ? 'server' : 'direct'
+    const normalizedDraft: AppSettings = {
       ...nextDraft,
       apiMode,
       baseUrl: normalizeBaseUrl(nextDraft.baseUrl.trim() || DEFAULT_SETTINGS.baseUrl),
@@ -51,8 +53,8 @@ export default function SettingsModal() {
       model: nextDraft.model.trim() || defaultModel,
       timeout: Number(nextDraft.timeout) || DEFAULT_SETTINGS.timeout,
       backendUrl: nextDraft.backendUrl.trim(),
-      storageMode: nextDraft.storageMode === 'server' ? 'server' : DEFAULT_SETTINGS.storageMode,
-      generationMode: nextDraft.generationMode === 'server' ? 'server' : DEFAULT_SETTINGS.generationMode,
+      storageMode,
+      generationMode,
     }
     setDraft(normalizedDraft)
     setSettings(normalizedDraft)

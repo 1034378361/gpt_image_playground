@@ -3,5 +3,6 @@ dist/
 dev-proxy.config.json
 backend/data/
 backend/.venv/
+backend/dev-server*.log
 *.pyc
 __pycache__/
