@@ -1,9 +1,10 @@
-import type { TaskRecord, StoredImage } from '../types'
+import type { PromptTemplate, TaskRecord, StoredImage } from '../types'
 
 const DB_NAME = 'gpt-image-playground'
-const DB_VERSION = 1
+const DB_VERSION = 2
 const STORE_TASKS = 'tasks'
 const STORE_IMAGES = 'images'
+const STORE_TEMPLATES = 'templates'
 
 function openDB(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
@@ -15,6 +16,9 @@ function openDB(): Promise<IDBDatabase> {
       }
       if (!db.objectStoreNames.contains(STORE_IMAGES)) {
         db.createObjectStore(STORE_IMAGES, { keyPath: 'id' })
+      }
+      if (!db.objectStoreNames.contains(STORE_TEMPLATES)) {
+        db.createObjectStore(STORE_TEMPLATES, { keyPath: 'id' })
       }
     }
     req.onsuccess = () => resolve(req.result)
@@ -55,6 +59,24 @@ export function deleteTask(id: string): Promise<undefined> {
 
 export function clearTasks(): Promise<undefined> {
   return dbTransaction(STORE_TASKS, 'readwrite', (s) => s.clear())
+}
+
+// ===== Prompt templates =====
+
+export function getAllTemplates(): Promise<PromptTemplate[]> {
+  return dbTransaction(STORE_TEMPLATES, 'readonly', (s) => s.getAll())
+}
+
+export function putTemplate(template: PromptTemplate): Promise<IDBValidKey> {
+  return dbTransaction(STORE_TEMPLATES, 'readwrite', (s) => s.put(template))
+}
+
+export function deleteTemplate(id: string): Promise<undefined> {
+  return dbTransaction(STORE_TEMPLATES, 'readwrite', (s) => s.delete(id))
+}
+
+export function clearTemplates(): Promise<undefined> {
+  return dbTransaction(STORE_TEMPLATES, 'readwrite', (s) => s.clear())
 }
 
 // ===== Images =====

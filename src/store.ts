@@ -7,13 +7,20 @@ import type {
   MaskDraft,
   TaskRecord,
   ExportData,
+  PromptTemplate,
+  PromptTemplateDraft,
+  TemplateFilters,
 } from './types'
 import { DEFAULT_SETTINGS, DEFAULT_PARAMS } from './types'
 import {
   getAllTasks,
+  getAllTemplates,
   putTask,
+  putTemplate,
   deleteTask as dbDeleteTask,
+  deleteTemplate as dbDeleteTemplate,
   clearTasks as dbClearTasks,
+  clearTemplates as dbClearTemplates,
   getImage,
   getAllImages,
   putImage,
@@ -26,6 +33,7 @@ import { callImageApi } from './lib/api'
 import { validateMaskMatchesImage } from './lib/canvasImage'
 import { orderInputImagesForMask } from './lib/mask'
 import { normalizeImageSize } from './lib/size'
+import { duplicateTemplateRecord, normalizeTemplateDraft } from './lib/templateUtils'
 import { zipSync, unzipSync, strToU8, strFromU8 } from 'fflate'
 
 // ===== Image cache =====
@@ -73,6 +81,25 @@ interface AppState {
   // 参数
   params: TaskParams
   setParams: (p: Partial<TaskParams>) => void
+
+  // 模板库
+  currentView: 'tasks' | 'templates'
+  setCurrentView: (view: AppState['currentView']) => void
+  templates: PromptTemplate[]
+  setTemplates: (templates: PromptTemplate[]) => void
+  templateFilters: TemplateFilters
+  setTemplateFilters: (filters: Partial<TemplateFilters>) => void
+  selectedTemplateId: string | null
+  setSelectedTemplateId: (id: string | null) => void
+  templateEditor:
+    | { mode: 'create' }
+    | { mode: 'fromCurrent' }
+    | { mode: 'fromTask'; taskId: string }
+    | { mode: 'edit'; templateId: string }
+    | null
+  setTemplateEditor: (editor: AppState['templateEditor']) => void
+  activeTemplateId: string | null
+  setActiveTemplateId: (id: string | null) => void
 
   // 任务列表
   tasks: TaskRecord[]
@@ -183,6 +210,26 @@ export const useStore = create<AppState>()(
       params: { ...DEFAULT_PARAMS },
       setParams: (p) => set((s) => ({ params: { ...s.params, ...p } })),
 
+      // Templates
+      currentView: 'tasks',
+      setCurrentView: (currentView) => set({ currentView }),
+      templates: [],
+      setTemplates: (templates) => set({ templates }),
+      templateFilters: {
+        query: '',
+        category: '__all__',
+        tag: '__all__',
+        favoriteOnly: false,
+      },
+      setTemplateFilters: (filters) =>
+        set((s) => ({ templateFilters: { ...s.templateFilters, ...filters } })),
+      selectedTemplateId: null,
+      setSelectedTemplateId: (selectedTemplateId) => set({ selectedTemplateId }),
+      templateEditor: null,
+      setTemplateEditor: (templateEditor) => set({ templateEditor }),
+      activeTemplateId: null,
+      setActiveTemplateId: (activeTemplateId) => set({ activeTemplateId }),
+
       // Tasks
       tasks: [],
       setTasks: (tasks) => set({ tasks }),
@@ -253,6 +300,12 @@ function genId(): string {
   return Date.now().toString(36) + (++uid).toString(36) + Math.random().toString(36).slice(2, 6)
 }
 
+function getTemplateCoverImageIds(templates = useStore.getState().templates): string[] {
+  return templates
+    .map((template) => template.coverImageId)
+    .filter((id): id is string => Boolean(id))
+}
+
 export function getCodexCliPromptKey(settings: AppSettings): string {
   return `${settings.baseUrl}\n${settings.apiKey}`
 }
@@ -278,8 +331,9 @@ export function showCodexCliPrompt(force = false, reason = '接口返回的提�
 
 /** 初始化：从 IndexedDB 加载任务和图片缓存，清理孤立图片 */
 export async function initStore() {
-  const tasks = await getAllTasks()
+  const [tasks, templates] = await Promise.all([getAllTasks(), getAllTemplates()])
   useStore.getState().setTasks(tasks)
+  useStore.getState().setTemplates(templates)
 
   // 收集所有任务引用的图片 id
   const referencedIds = new Set<string>()
@@ -287,6 +341,9 @@ export async function initStore() {
     for (const id of t.inputImageIds || []) referencedIds.add(id)
     if (t.maskImageId) referencedIds.add(t.maskImageId)
     for (const id of t.outputImages || []) referencedIds.add(id)
+  }
+  for (const id of getTemplateCoverImageIds(templates)) {
+    referencedIds.add(id)
   }
 
   // 预加载所有图片到缓存，同时清理孤立图片
@@ -302,7 +359,7 @@ export async function initStore() {
 
 /** 提交新任务 */
 export async function submitTask(options: { allowFullMask?: boolean } = {}) {
-  const { settings, prompt, inputImages, maskDraft, params, showToast, setConfirmDialog } =
+  const { settings, prompt, inputImages, maskDraft, params, activeTemplateId, templates, showToast, setConfirmDialog } =
     useStore.getState()
 
   if (!settings.apiKey) {
@@ -363,8 +420,12 @@ export async function submitTask(options: { allowFullMask?: boolean } = {}) {
   }
 
   const taskId = genId()
+  const sourceTemplate = activeTemplateId
+    ? templates.find((template) => template.id === activeTemplateId) ?? null
+    : null
   const task: TaskRecord = {
     id: taskId,
+    ...(sourceTemplate ? { templateId: sourceTemplate.id, templateVersionId: String(sourceTemplate.version) } : {}),
     prompt: prompt.trim(),
     params: normalizedParams,
     inputImageIds: orderedInputImages.map((i) => i.id),
@@ -381,6 +442,9 @@ export async function submitTask(options: { allowFullMask?: boolean } = {}) {
   const latestTasks = useStore.getState().tasks
   useStore.getState().setTasks([task, ...latestTasks])
   await putTask(task)
+  if (sourceTemplate) {
+    await linkTaskToTemplate(sourceTemplate.id, taskId)
+  }
 
   // 异步调用 API
   executeTask(taskId)
@@ -489,11 +553,121 @@ export function updateTaskInStore(taskId: string, patch: Partial<TaskRecord>) {
   if (task) putTask(task)
 }
 
+// ===== Prompt template actions =====
+
+export async function createTemplateFromDraft(draft: PromptTemplateDraft): Promise<PromptTemplate> {
+  const normalized = normalizeTemplateDraft(draft)
+  const now = Date.now()
+  const template: PromptTemplate = {
+    ...normalized,
+    id: genId(),
+    userId: null,
+    version: 1,
+    linkedTaskIds: normalized.linkedTaskIds ?? [],
+    isFavorite: normalized.isFavorite ?? false,
+    createdAt: now,
+    updatedAt: now,
+  }
+
+  await putTemplate(template)
+  useStore.getState().setTemplates([template, ...useStore.getState().templates])
+  return template
+}
+
+export async function updateTemplateInStore(
+  templateId: string,
+  patch: Partial<Omit<PromptTemplate, 'id' | 'createdAt'>>,
+  options: { bumpVersion?: boolean } = {},
+): Promise<PromptTemplate | null> {
+  const { templates, setTemplates } = useStore.getState()
+  const existing = templates.find((template) => template.id === templateId)
+  if (!existing) return null
+
+  const updated: PromptTemplate = {
+    ...existing,
+    ...patch,
+    tags: patch.tags ? normalizeTemplateDraft({ ...existing, ...patch, tags: patch.tags }).tags : existing.tags,
+    linkedTaskIds: patch.linkedTaskIds ? [...new Set(patch.linkedTaskIds)] : existing.linkedTaskIds,
+    coverImageId: patch.coverImageId === undefined ? existing.coverImageId : patch.coverImageId || null,
+    version: options.bumpVersion ? existing.version + 1 : patch.version ?? existing.version,
+    updatedAt: Date.now(),
+  }
+
+  await putTemplate(updated)
+  setTemplates(templates.map((template) => (template.id === templateId ? updated : template)))
+  return updated
+}
+
+export async function removeTemplate(templateId: string) {
+  const { templates, setTemplates, selectedTemplateId, activeTemplateId, showToast } = useStore.getState()
+  setTemplates(templates.filter((template) => template.id !== templateId))
+  await dbDeleteTemplate(templateId)
+  if (selectedTemplateId === templateId) useStore.getState().setSelectedTemplateId(null)
+  if (activeTemplateId === templateId) useStore.getState().setActiveTemplateId(null)
+  showToast('模板已删除', 'success')
+}
+
+export async function duplicateTemplate(templateId: string): Promise<PromptTemplate | null> {
+  const template = useStore.getState().templates.find((item) => item.id === templateId)
+  if (!template) return null
+
+  const copy = duplicateTemplateRecord(template, genId(), Date.now())
+  await putTemplate(copy)
+  useStore.getState().setTemplates([copy, ...useStore.getState().templates])
+  useStore.getState().showToast('模板已复制', 'success')
+  return copy
+}
+
+export async function toggleTemplateFavorite(templateId: string) {
+  const template = useStore.getState().templates.find((item) => item.id === templateId)
+  if (!template) return
+  await updateTemplateInStore(templateId, { isFavorite: !template.isFavorite })
+}
+
+export function applyTemplate(template: PromptTemplate) {
+  const { setPrompt, setParams, setSettings, setActiveTemplateId, setCurrentView, setSelectedTemplateId, showToast } =
+    useStore.getState()
+  setPrompt(template.prompt)
+  setParams(template.params)
+  setSettings({ apiMode: template.apiMode, model: template.model })
+  setActiveTemplateId(template.id)
+  setCurrentView('tasks')
+  setSelectedTemplateId(null)
+  showToast('已套用模板到输入区', 'success')
+}
+
+export async function linkTaskToTemplate(templateId: string, taskId: string) {
+  const template = useStore.getState().templates.find((item) => item.id === templateId)
+  if (!template) return
+  if (template.linkedTaskIds.includes(taskId)) return
+  await updateTemplateInStore(templateId, { linkedTaskIds: [taskId, ...template.linkedTaskIds] })
+}
+
+export async function setTemplateCover(templateId: string, imageId: string) {
+  const updated = await updateTemplateInStore(templateId, { coverImageId: imageId })
+  if (updated) {
+    useStore.getState().showToast('已设为模板封面', 'success')
+  }
+}
+
+export async function createTemplateFromTask(task: TaskRecord, draft: PromptTemplateDraft): Promise<PromptTemplate> {
+  const template = await createTemplateFromDraft({
+    ...draft,
+    linkedTaskIds: [...new Set([task.id, ...(draft.linkedTaskIds ?? [])])],
+  })
+  updateTaskInStore(task.id, {
+    templateId: template.id,
+    templateVersionId: String(template.version),
+  })
+  return template
+}
+
 /** 复用配置 */
 export async function reuseConfig(task: TaskRecord) {
-  const { setPrompt, setParams, setInputImages, setMaskDraft, clearMaskDraft, showToast } = useStore.getState()
+  const { setPrompt, setParams, setInputImages, setMaskDraft, clearMaskDraft, setActiveTemplateId, showToast } = useStore.getState()
   setPrompt(task.prompt)
   setParams(task.params)
+  setActiveTemplateId(task.templateId ?? null)
 
   // 恢复输入图片
   const imgs: InputImage[] = []
@@ -572,6 +746,7 @@ export async function removeMultipleTasks(taskIds: string[]) {
     for (const id of t.outputImages || []) stillUsed.add(id)
   }
   for (const img of inputImages) stillUsed.add(img.id)
+  for (const imgId of getTemplateCoverImageIds()) stillUsed.add(imgId)
 
   // 删除孤立图片
   for (const imgId of deletedImageIds) {
@@ -614,6 +789,7 @@ export async function removeTask(task: TaskRecord) {
     for (const id of t.outputImages || []) stillUsed.add(id)
   }
   for (const img of inputImages) stillUsed.add(img.id)
+  for (const imgId of getTemplateCoverImageIds()) stillUsed.add(imgId)
 
   // 删除孤立图片
   for (const imgId of taskImageIds) {
@@ -629,12 +805,15 @@ export async function removeTask(task: TaskRecord) {
 /** 清空所有数据（含配置重置） */
 export async function clearAllData() {
   await dbClearTasks()
+  await dbClearTemplates()
   await clearImages()
   imageCache.clear()
-  const { setTasks, clearInputImages, clearMaskDraft, setSettings, setParams, showToast } = useStore.getState()
+  const { setTasks, setTemplates, clearInputImages, clearMaskDraft, setSettings, setParams, showToast } = useStore.getState()
   setTasks([])
+  setTemplates([])
   clearInputImages()
   useStore.setState({ dismissedCodexCliPrompts: [] })
+  useStore.getState().setActiveTemplateId(null)
   clearMaskDraft()
   setSettings({ ...DEFAULT_SETTINGS })
   setParams({ ...DEFAULT_PARAMS })
@@ -666,6 +845,7 @@ function bytesToDataUrl(bytes: Uint8Array, filePath: string): string {
 export async function exportData() {
   try {
     const tasks = await getAllTasks()
+    const templates = await getAllTemplates()
     const images = await getAllImages()
     const { settings } = useStore.getState()
     const exportedAt = Date.now()
@@ -683,6 +863,11 @@ export async function exportData() {
         }
       }
     }
+    for (const template of templates) {
+      if (template.coverImageId && !imageCreatedAtFallback.has(template.coverImageId)) {
+        imageCreatedAtFallback.set(template.coverImageId, template.createdAt)
+      }
+    }
 
     const imageFiles: ExportData['imageFiles'] = {}
     const zipFiles: Record<string, Uint8Array | [Uint8Array, { mtime: Date }]> = {}
@@ -696,10 +881,11 @@ export async function exportData() {
     }
 
     const manifest: ExportData = {
-      version: 2,
+      version: 3,
       exportedAt: new Date(exportedAt).toISOString(),
       settings,
       tasks,
+      templates,
       imageFiles,
     }
 
@@ -748,13 +934,18 @@ export async function importData(file: File) {
     for (const task of data.tasks) {
       await putTask(task)
     }
+    for (const template of data.templates ?? []) {
+      await putTemplate(template)
+    }
 
     if (data.settings) {
       useStore.getState().setSettings(data.settings)
     }
 
     const tasks = await getAllTasks()
+    const templates = await getAllTemplates()
     useStore.getState().setTasks(tasks)
+    useStore.getState().setTemplates(templates)
     useStore
       .getState()
       .showToast(`已导入 ${data.tasks.length} 条记录`, 'success')

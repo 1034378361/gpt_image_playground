@@ -1,5 +1,5 @@
 import { useEffect, useState, useMemo, useRef } from 'react'
-import { useStore, getCachedImage, ensureImageCached, reuseConfig, editOutputs, removeTask, updateTaskInStore, showCodexCliPrompt, getCodexCliPromptKey } from '../store'
+import { useStore, getCachedImage, ensureImageCached, reuseConfig, editOutputs, removeTask, updateTaskInStore, showCodexCliPrompt, getCodexCliPromptKey, setTemplateCover } from '../store'
 import { useCloseOnEscape } from '../hooks/useCloseOnEscape'
 import { formatImageRatio } from '../lib/size'
 import { ActualValueBadge, DetailParamValue } from '../lib/paramDisplay'
@@ -16,6 +16,10 @@ export default function DetailModal() {
   const showToast = useStore((s) => s.showToast)
   const settings = useStore((s) => s.settings)
   const dismissedCodexCliPrompts = useStore((s) => s.dismissedCodexCliPrompts)
+  const templates = useStore((s) => s.templates)
+  const setSelectedTemplateId = useStore((s) => s.setSelectedTemplateId)
+  const setCurrentView = useStore((s) => s.setCurrentView)
+  const setTemplateEditor = useStore((s) => s.setTemplateEditor)
 
   const [imageIndex, setImageIndex] = useState(0)
   const [imageSrcs, setImageSrcs] = useState<Record<string, string>>({})
@@ -163,6 +167,9 @@ export default function DetailModal() {
   const hasHandledPromptWarning = settings.codexCli || dismissedCodexCliPrompts.includes(codexCliPromptKey)
   const showPromptWarning = Boolean(currentOutputImageId && (!currentRevisedPrompt || showRevisedPrompt) && !hasHandledPromptWarning)
   const aggregateActualParams = outputLen > 0 ? { ...task.actualParams, n: outputLen } : task.actualParams
+  const sourceTemplate = task.templateId
+    ? templates.find((template) => template.id === task.templateId) ?? null
+    : null
 
   const formatTime = (ts: number | null) => {
     if (!ts) return ''
@@ -198,6 +205,22 @@ export default function DetailModal() {
     if (!imgId) return
     setMaskEditorImageId(imgId)
     setDetailTaskId(null)
+  }
+
+  const handleOpenSourceTemplate = () => {
+    if (!sourceTemplate) return
+    setDetailTaskId(null)
+    setCurrentView('templates')
+    setSelectedTemplateId(sourceTemplate.id)
+  }
+
+  const handleSaveAsTemplate = () => {
+    setTemplateEditor({ mode: 'fromTask', taskId: task.id })
+  }
+
+  const handleSetCurrentAsCover = () => {
+    if (!sourceTemplate || !currentOutputImageId) return
+    setTemplateCover(sourceTemplate.id, currentOutputImageId)
   }
 
   const handleDelete = () => {
@@ -285,6 +308,8 @@ export default function DetailModal() {
               <img
                 ref={mainImageRef}
                 src={currentOutputImageSrc}
+                data-image-id={currentOutputImageId}
+                data-template-id={sourceTemplate?.id}
                 className="max-w-[calc(100%-2rem)] max-h-[calc(100%-2rem)] object-contain cursor-pointer"
                 onLoad={() => {
                   const panel = imagePanelRef.current
@@ -452,6 +477,28 @@ export default function DetailModal() {
               </div>
             )}
 
+            {sourceTemplate && (
+              <div className="mb-4 rounded-xl border border-blue-200/70 bg-blue-50/80 px-3 py-2 dark:border-blue-400/20 dark:bg-blue-500/10">
+                <div className="flex items-center justify-between gap-2">
+                  <button
+                    onClick={handleOpenSourceTemplate}
+                    className="min-w-0 text-left text-sm font-medium text-blue-700 hover:underline dark:text-blue-300"
+                    title={sourceTemplate.title}
+                  >
+                    来源模板：<span className="truncate">{sourceTemplate.title}</span>
+                  </button>
+                  {currentOutputImageId && (
+                    <button
+                      onClick={handleSetCurrentAsCover}
+                      className="flex-shrink-0 rounded-lg bg-white/70 px-2 py-1 text-xs text-blue-600 hover:bg-white dark:bg-white/[0.06] dark:text-blue-300 dark:hover:bg-white/[0.1]"
+                    >
+                      设为封面
+                    </button>
+                  )}
+                </div>
+              </div>
+            )}
+
             {/* 参考图 */}
             {allInputImageIds.length > 0 && (
               <div className="mb-4">
@@ -565,6 +612,15 @@ export default function DetailModal() {
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
               </svg>
               编辑输出
+            </button>
+            <button
+              onClick={handleSaveAsTemplate}
+              className="col-span-2 sm:flex-1 flex items-center justify-center gap-1.5 px-3 py-2 rounded-xl bg-purple-50 dark:bg-purple-500/10 text-purple-600 dark:text-purple-400 hover:bg-purple-100 dark:hover:bg-purple-500/20 transition text-sm font-medium whitespace-nowrap"
+            >
+              <svg className="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v16l-7-4-7 4z" />
+              </svg>
+              存模板
             </button>
             <button
               onClick={handleDelete}

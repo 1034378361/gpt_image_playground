@@ -51,6 +51,14 @@ export default function InputBar() {
   const filterStatus = useStore((s) => s.filterStatus)
   const filterFavorite = useStore((s) => s.filterFavorite)
   const searchQuery = useStore((s) => s.searchQuery)
+  const templates = useStore((s) => s.templates)
+  const activeTemplateId = useStore((s) => s.activeTemplateId)
+  const setActiveTemplateId = useStore((s) => s.setActiveTemplateId)
+  const setTemplateEditor = useStore((s) => s.setTemplateEditor)
+  const setSelectedTemplateId = useStore((s) => s.setSelectedTemplateId)
+  const setCurrentView = useStore((s) => s.setCurrentView)
+  const showToast = useStore((s) => s.showToast)
+  const activeTemplate = templates.find((template) => template.id === activeTemplateId) ?? null
 
   const filteredTasks = useMemo(() => {
     const sorted = [...tasks].sort((a, b) => b.createdAt - a.createdAt)
@@ -104,6 +112,14 @@ export default function InputBar() {
       },
     })
   }, [selectedTaskIds, setConfirmDialog])
+
+  const handleSaveCurrentTemplate = useCallback(() => {
+    if (!prompt.trim()) {
+      showToast('请输入提示词后再保存模板', 'error')
+      return
+    }
+    setTemplateEditor({ mode: 'fromCurrent' })
+  }, [prompt, setTemplateEditor, showToast])
   const maskDraft = useStore((s) => s.maskDraft)
   const clearMaskDraft = useStore((s) => s.clearMaskDraft)
   const setMaskEditorImageId = useStore((s) => s.setMaskEditorImageId)
@@ -837,6 +853,32 @@ export default function InputBar() {
             )
           )}
 
+          {activeTemplate && (
+            <div className="mb-2 flex items-center gap-2 rounded-xl border border-blue-200/70 bg-blue-50/80 px-3 py-2 text-xs text-blue-700 dark:border-blue-400/20 dark:bg-blue-500/10 dark:text-blue-300">
+              <button
+                type="button"
+                onClick={() => {
+                  setCurrentView('templates')
+                  setSelectedTemplateId(activeTemplate.id)
+                }}
+                className="min-w-0 flex-1 truncate text-left font-medium hover:underline"
+                title={activeTemplate.title}
+              >
+                来源模板：{activeTemplate.title}
+              </button>
+              <button
+                type="button"
+                onClick={() => setActiveTemplateId(null)}
+                className="rounded p-1 hover:bg-blue-100 dark:hover:bg-blue-500/20 transition"
+                title="取消模板关联"
+              >
+                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18 18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+          )}
+
           {/* 输入框 */}
           <textarea
             ref={textareaRef}
@@ -875,6 +917,15 @@ export default function InputBar() {
                     </svg>
                   </button>
                 </div>
+                <button
+                  onClick={handleSaveCurrentTemplate}
+                  className="p-2.5 rounded-xl bg-gray-200 dark:bg-white/[0.06] hover:bg-gray-300 dark:hover:bg-white/[0.1] text-gray-500 dark:text-gray-300 transition-all shadow-sm hover:shadow"
+                  title="保存为模板"
+                >
+                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v16l-7-4-7 4z" />
+                  </svg>
+                </button>
                 <div
                   className="relative"
                   onMouseEnter={() => setSubmitHover(true)}
@@ -929,6 +980,15 @@ export default function InputBar() {
                     </svg>
                   </button>
                 </div>
+                <button
+                  onClick={handleSaveCurrentTemplate}
+                  className="p-2.5 rounded-xl bg-gray-200 dark:bg-white/[0.06] hover:bg-gray-300 dark:hover:bg-white/[0.1] text-gray-500 dark:text-gray-300 transition-all shadow-sm flex-shrink-0"
+                  title="保存为模板"
+                >
+                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v16l-7-4-7 4z" />
+                  </svg>
+                </button>
                 <div
                   className="relative flex-1"
                   onMouseEnter={() => setSubmitHover(true)}

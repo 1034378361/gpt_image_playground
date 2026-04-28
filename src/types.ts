@@ -44,6 +44,50 @@ export const DEFAULT_PARAMS: TaskParams = {
   n: 1,
 }
 
+// ===== 提示词模板 =====
+
+export interface PromptTemplate {
+  id: string
+  userId?: string | null
+  title: string
+  description: string
+  prompt: string
+  negativePrompt?: string
+  tags: string[]
+  category: string
+  params: TaskParams
+  apiMode: ApiMode
+  model: string
+  coverImageId?: string | null
+  linkedTaskIds: string[]
+  isFavorite: boolean
+  version: number
+  createdAt: number
+  updatedAt: number
+}
+
+export interface PromptTemplateDraft {
+  title: string
+  description: string
+  prompt: string
+  negativePrompt?: string
+  tags: string[]
+  category: string
+  params: TaskParams
+  apiMode: ApiMode
+  model: string
+  coverImageId?: string | null
+  linkedTaskIds?: string[]
+  isFavorite?: boolean
+}
+
+export interface TemplateFilters {
+  query: string
+  category: string
+  tag: string
+  favoriteOnly: boolean
+}
+
 // ===== 输入图片（UI 层面） =====
 
 export interface InputImage {
@@ -65,6 +109,10 @@ export type TaskStatus = 'running' | 'done' | 'error'
 
 export interface TaskRecord {
   id: string
+  /** 来源模板 id */
+  templateId?: string
+  /** 来源模板版本，预留给后端/未来模板版本管理 */
+  templateVersionId?: string
   prompt: string
   params: TaskParams
   /** API 返回的实际生效参数，用于标记与请求值不一致的情况 */
@@ -172,6 +220,7 @@ export interface ExportData {
   exportedAt: string
   settings: AppSettings
   tasks: TaskRecord[]
+  templates?: PromptTemplate[]
   /** imageId → 图片信息 */
   imageFiles: Record<string, {
     path: string

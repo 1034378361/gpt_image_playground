@@ -5,6 +5,9 @@ import HelpModal from './HelpModal'
 
 export default function Header() {
   const setShowSettings = useStore((s) => s.setShowSettings)
+  const currentView = useStore((s) => s.currentView)
+  const setCurrentView = useStore((s) => s.setCurrentView)
+  const setTemplateEditor = useStore((s) => s.setTemplateEditor)
   const { hasUpdate, latestRelease, dismiss } = useVersionCheck()
   const [showHelp, setShowHelp] = useState(false)
 
@@ -36,6 +39,40 @@ export default function Header() {
           )}
         </div>
         <div className="flex items-center gap-1">
+          <div className="flex items-center rounded-xl border border-gray-200 dark:border-white/[0.08] bg-white/70 dark:bg-gray-900/70 p-0.5">
+            <button
+              onClick={() => setCurrentView('tasks')}
+              className={`px-2 sm:px-3 py-1.5 rounded-lg text-xs sm:text-sm transition ${
+                currentView === 'tasks'
+                  ? 'bg-blue-500 text-white shadow-sm'
+                  : 'text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-white/[0.06]'
+              }`}
+            >
+              任务
+            </button>
+            <button
+              onClick={() => setCurrentView('templates')}
+              className={`px-2 sm:px-3 py-1.5 rounded-lg text-xs sm:text-sm transition ${
+                currentView === 'templates'
+                  ? 'bg-blue-500 text-white shadow-sm'
+                  : 'text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-white/[0.06]'
+              }`}
+            >
+              模板
+            </button>
+          </div>
+          <button
+            onClick={() => {
+              setCurrentView('templates')
+              setTemplateEditor({ mode: 'create' })
+            }}
+            className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-900 transition-colors"
+            title="新建模板"
+          >
+            <svg className="w-5 h-5 text-gray-600 dark:text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 5v14m7-7H5" />
+            </svg>
+          </button>
           <button
             onClick={() => setShowHelp(true)}
             className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-900 transition-colors"

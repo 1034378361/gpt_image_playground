@@ -6,8 +6,12 @@ import type { ApiMode } from './types'
 import Header from './components/Header'
 import SearchBar from './components/SearchBar'
 import TaskGrid from './components/TaskGrid'
+import TemplateFilterBar from './components/TemplateFilterBar'
+import TemplateGrid from './components/TemplateGrid'
 import InputBar from './components/InputBar'
 import DetailModal from './components/DetailModal'
+import TemplateDetailModal from './components/TemplateDetailModal'
+import TemplateEditorModal from './components/TemplateEditorModal'
 import Lightbox from './components/Lightbox'
 import SettingsModal from './components/SettingsModal'
 import ConfirmDialog from './components/ConfirmDialog'
@@ -17,6 +21,7 @@ import ImageContextMenu from './components/ImageContextMenu'
 
 export default function App() {
   const setSettings = useStore((s) => s.setSettings)
+  const currentView = useStore((s) => s.currentView)
 
   useEffect(() => {
     const searchParams = new URLSearchParams(window.location.search)
@@ -76,11 +81,22 @@ export default function App() {
     <>
       <Header />
       <main data-home-main className="safe-area-x max-w-7xl mx-auto pb-48">
-        <SearchBar />
-        <TaskGrid />
+        {currentView === 'templates' ? (
+          <>
+            <TemplateFilterBar />
+            <TemplateGrid />
+          </>
+        ) : (
+          <>
+            <SearchBar />
+            <TaskGrid />
+          </>
+        )}
       </main>
       <InputBar />
       <DetailModal />
+      <TemplateDetailModal />
+      <TemplateEditorModal />
       <Lightbox />
       <SettingsModal />
       <ConfirmDialog />

@@ -1,9 +1,9 @@
 import React, { useEffect, useState, useRef } from 'react'
-import { useStore, addImageFromUrl } from '../store'
+import { useStore, addImageFromUrl, setTemplateCover } from '../store'
 import { copyBlobToClipboard, getClipboardFailureMessage } from '../lib/clipboard'
 
 export default function ImageContextMenu() {
-  const [menuInfo, setMenuInfo] = useState<{ src: string; x: number; y: number } | null>(null)
+  const [menuInfo, setMenuInfo] = useState<{ src: string; x: number; y: number; imageId?: string; templateId?: string } | null>(null)
   const showToast = useStore((s) => s.showToast)
   const inputImages = useStore((s) => s.inputImages)
   const setDetailTaskId = useStore((s) => s.setDetailTaskId)
@@ -26,6 +26,8 @@ export default function ImageContextMenu() {
           src: imgTarget.src,
           x: e.clientX,
           y: e.clientY,
+          imageId: imgTarget.dataset.imageId,
+          templateId: imgTarget.dataset.templateId,
         })
       }
     }
@@ -121,11 +123,19 @@ export default function ImageContextMenu() {
     }
   }
 
+  const handleSetCover = async (e: React.MouseEvent) => {
+    e.stopPropagation()
+    if (!menuInfo.imageId || !menuInfo.templateId) return
+    const { imageId, templateId } = menuInfo
+    setMenuInfo(null)
+    await setTemplateCover(templateId, imageId)
+  }
+
   // 保证菜单在视口内
   let left = menuInfo.x
   let top = menuInfo.y
   const MENU_WIDTH = 120
-  const MENU_HEIGHT = 128 // 三个按钮高度加 padding
+  const MENU_HEIGHT = menuInfo.imageId && menuInfo.templateId ? 168 : 128
 
   if (left + MENU_WIDTH > window.innerWidth) {
     left -= MENU_WIDTH
@@ -168,6 +178,17 @@ export default function ImageContextMenu() {
         </svg>
         编辑
       </button>
+      {menuInfo.imageId && menuInfo.templateId && (
+        <button
+          onClick={handleSetCover}
+          className="w-full px-4 py-2 text-left text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700/50 flex items-center gap-2 transition-colors"
+        >
+          <svg className="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16l4-4 4 4 8-8" />
+          </svg>
+          设封面
+        </button>
+      )}
     </div>
   )
 }

@@ -275,6 +275,8 @@ export default function TaskCard({
             <>
               <img
                 src={thumbSrc}
+                data-image-id={task.outputImages[0]}
+                data-template-id={task.templateId}
                 className="w-full h-full object-cover"
                 loading="lazy"
                 alt=""
