@@ -22,6 +22,7 @@ export default function SettingsModal() {
   const setSettings = useStore((s) => s.setSettings)
   const backendUser = useStore((s) => s.backendUser)
   const setConfirmDialog = useStore((s) => s.setConfirmDialog)
+  const showToast = useStore((s) => s.showToast)
   const importInputRef = useRef<HTMLInputElement>(null)
   const [draft, setDraft] = useState<AppSettings>(settings)
   const [timeoutInput, setTimeoutInput] = useState(String(settings.timeout))
@@ -90,14 +91,49 @@ export default function SettingsModal() {
     e.target.value = ''
   }
 
+  const validateBackendCredentials = () => {
+    const username = backendUsername.trim()
+    if (!username) {
+      showToast('请输入后端账户用户名', 'error')
+      return null
+    }
+    if (username.length < 3) {
+      showToast('用户名至少需要 3 位', 'error')
+      return null
+    }
+    if (!backendPassword) {
+      showToast('请输入后端账户密码', 'error')
+      return null
+    }
+    if (backendPassword.length < 8) {
+      showToast('密码至少需要 8 位', 'error')
+      return null
+    }
+    return { username, password: backendPassword }
+  }
+
   const runBackendAction = async (action: () => Promise<void>) => {
     setBackendBusy(true)
     try {
       await action()
       setBackendPassword('')
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : String(err), 'error')
     } finally {
       setBackendBusy(false)
     }
+  }
+
+  const handleBackendLogin = () => {
+    const credentials = validateBackendCredentials()
+    if (!credentials) return
+    void runBackendAction(() => loginBackend(credentials.username, credentials.password))
+  }
+
+  const handleBackendRegister = () => {
+    const credentials = validateBackendCredentials()
+    if (!credentials) return
+    void runBackendAction(() => registerBackend(credentials.username, credentials.password))
   }
 
   return (
@@ -377,21 +413,24 @@ export default function SettingsModal() {
                     <div className="flex gap-2">
                       <button
                         type="button"
-                        onClick={() => runBackendAction(() => loginBackend(backendUsername, backendPassword))}
-                        disabled={backendBusy || !backendUsername || !backendPassword}
-                        className="flex-1 rounded-xl bg-blue-500 px-3 py-2 text-sm font-medium text-white hover:bg-blue-600 disabled:opacity-50"
+                        onClick={handleBackendLogin}
+                        disabled={backendBusy}
+                        className="flex-1 rounded-xl bg-blue-500 px-3 py-2 text-sm font-medium text-white hover:bg-blue-600 disabled:cursor-wait disabled:opacity-50"
                       >
                         登录
                       </button>
                       <button
                         type="button"
-                        onClick={() => runBackendAction(() => registerBackend(backendUsername, backendPassword))}
-                        disabled={backendBusy || !backendUsername || !backendPassword}
-                        className="flex-1 rounded-xl bg-gray-800 px-3 py-2 text-sm font-medium text-white hover:bg-gray-900 disabled:opacity-50 dark:bg-white/[0.12] dark:hover:bg-white/[0.18]"
+                        onClick={handleBackendRegister}
+                        disabled={backendBusy}
+                        className="flex-1 rounded-xl bg-gray-800 px-3 py-2 text-sm font-medium text-white hover:bg-gray-900 disabled:cursor-wait disabled:opacity-50 dark:bg-white/[0.12] dark:hover:bg-white/[0.18]"
                       >
                         注册
                       </button>
                     </div>
+                    <p className="text-xs text-gray-400 dark:text-gray-500">
+                      首次使用请先注册本地后端账户；用户名至少 3 位，密码至少 8 位。
+                    </p>
                   </div>
                 </div>
               )}
