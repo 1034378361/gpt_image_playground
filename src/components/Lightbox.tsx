@@ -117,6 +117,7 @@ export default function Lightbox() {
 
   return (
     <LightboxInner
+      imageId={lightboxImageId}
       src={src}
       maskPreviewSrc={maskPreviewSrc}
       onClose={close}
@@ -130,6 +131,7 @@ export default function Lightbox() {
 }
 
 interface LightboxInnerProps {
+  imageId: string
   src: string
   maskPreviewSrc?: string
   onClose: () => void
@@ -141,7 +143,7 @@ interface LightboxInnerProps {
 }
 
 /** 内部组件：保证挂载时 DOM 已经存在，所有 ref / effect 都可靠 */
-function LightboxInner({ src, maskPreviewSrc, onClose, showNav, currentIndex, total, onPrev, onNext }: LightboxInnerProps) {
+function LightboxInner({ imageId, src, maskPreviewSrc, onClose, showNav, currentIndex, total, onPrev, onNext }: LightboxInnerProps) {
   const containerRef = useRef<HTMLDivElement>(null)
 
   // 用 ref 追踪最新变换，避免闭包过期
@@ -461,6 +463,7 @@ function LightboxInner({ src, maskPreviewSrc, onClose, showNav, currentIndex, to
         >
           <img
             src={src}
+            data-image-id={imageId}
             className="max-w-[85vw] max-h-[85vh] object-contain rounded-lg shadow-2xl"
             onDragStart={(e) => e.preventDefault()}
             alt=""

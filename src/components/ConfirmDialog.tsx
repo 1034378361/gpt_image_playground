@@ -1,9 +1,11 @@
 import { useStore } from '../store'
 import { useCloseOnEscape } from '../hooks/useCloseOnEscape'
+import { useEffect, useState } from 'react'
 
 export default function ConfirmDialog() {
   const confirmDialog = useStore((s) => s.confirmDialog)
   const setConfirmDialog = useStore((s) => s.setConfirmDialog)
+  const [confirmValue, setConfirmValue] = useState('')
 
   const handleClose = () => {
     setConfirmDialog(null)
@@ -16,6 +18,10 @@ export default function ConfirmDialog() {
 
   useCloseOnEscape(Boolean(confirmDialog), handleClose)
 
+  useEffect(() => {
+    setConfirmValue('')
+  }, [confirmDialog?.title, confirmDialog?.message, confirmDialog?.confirmKeyword])
+
   if (!confirmDialog) return null
   const isDestructive = confirmDialog.title.includes('删除') || confirmDialog.title.includes('清空')
   const confirmTone = confirmDialog.tone ?? (isDestructive ? 'danger' : undefined)
@@ -26,6 +32,7 @@ export default function ConfirmDialog() {
       ? 'bg-red-500 hover:bg-red-600'
       : 'bg-blue-500 hover:bg-blue-600'
   const confirmText = confirmDialog.confirmText ?? (isDestructive ? '确认删除' : '确认')
+  const keywordMatched = !confirmDialog.confirmKeyword || confirmValue.trim() === confirmDialog.confirmKeyword
 
   return (
     <div
@@ -44,6 +51,19 @@ export default function ConfirmDialog() {
         <p className={`text-sm text-gray-500 dark:text-gray-400 mb-6 leading-relaxed whitespace-pre-line ${confirmDialog.messageAlign === 'center' ? 'text-center' : ''}`}>
           {confirmDialog.message}
         </p>
+        {confirmDialog.confirmKeyword && (
+          <div className="mb-6 space-y-2">
+            <div className="rounded-xl border border-red-200/80 bg-red-50/70 px-3 py-2 text-xs leading-relaxed text-red-600 dark:border-red-500/20 dark:bg-red-500/10 dark:text-red-300">
+              {confirmDialog.confirmHint ?? `请输入 “${confirmDialog.confirmKeyword}” 以继续。`}
+            </div>
+            <input
+              value={confirmValue}
+              onChange={(event) => setConfirmValue(event.target.value)}
+              placeholder={confirmDialog.confirmKeyword}
+              className="w-full rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm text-gray-700 outline-none transition focus:border-red-300 focus:ring-2 focus:ring-red-500/20 dark:border-white/[0.08] dark:bg-gray-950 dark:text-gray-200 dark:focus:border-red-400/40"
+            />
+          </div>
+        )}
         <div className="flex gap-2">
           <button
             onClick={handleCancel}
@@ -56,7 +76,8 @@ export default function ConfirmDialog() {
               confirmDialog.action()
               setConfirmDialog(null)
             }}
-            className={`flex-1 py-2 rounded-lg text-white text-sm font-medium transition ${confirmClassName}`}
+            disabled={!keywordMatched}
+            className={`flex-1 py-2 rounded-lg text-white text-sm font-medium transition disabled:cursor-not-allowed disabled:opacity-50 ${confirmClassName}`}
           >
             {confirmText}
           </button>

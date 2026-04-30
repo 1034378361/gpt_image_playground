@@ -1,8 +1,9 @@
 node_modules/
 dist/
-dev-proxy.config.json
 backend/data/
 backend/.venv/
 backend/dev-server*.log
+.backend-dev*.log
+.vite-dev*.log
 *.pyc
 __pycache__/

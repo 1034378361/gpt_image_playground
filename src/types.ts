@@ -1,43 +1,130 @@
 // ===== 设置 =====
 
 export type ApiMode = 'images' | 'responses'
-export type StorageMode = 'local' | 'server'
-export type GenerationMode = 'direct' | 'server'
+export type CodexCliMode = 'auto' | 'standard' | 'codex'
+export type ChannelHealthStatus = 'unknown' | 'checking' | 'healthy' | 'degraded' | 'error'
+export type ChannelCompatibilityStatus = 'unknown' | 'checking' | 'standard' | 'codex' | 'error'
 
 export interface AppSettings {
-  baseUrl: string
-  apiKey: string
+  channelId: string
   model: string
-  timeout: number
   apiMode: ApiMode
   codexCli: boolean
-  backendUrl: string
-  storageMode: StorageMode
-  generationMode: GenerationMode
 }
 
-const DEFAULT_BASE_URL = import.meta.env.VITE_DEFAULT_API_URL?.trim() || 'https://api.openai.com/v1'
-export const DEFAULT_IMAGES_MODEL = 'gpt-image-2'
-export const DEFAULT_RESPONSES_MODEL = 'gpt-5.5'
-
 export const DEFAULT_SETTINGS: AppSettings = {
-  baseUrl: DEFAULT_BASE_URL,
-  apiKey: '',
-  model: DEFAULT_IMAGES_MODEL,
-  timeout: 300,
+  channelId: '',
+  model: 'gpt-image-2',
   apiMode: 'images',
   codexCli: false,
-  backendUrl: '',
-  storageMode: 'server',
-  generationMode: 'server',
 }
 
 export interface BackendUser {
   id: string
   username: string
-  role: string
+  role: 'user' | 'reviewer' | 'admin'
   createdAt: number
   updatedAt: number
+}
+
+export interface AdminUser {
+  id: string
+  username: string
+  role: 'user' | 'reviewer' | 'admin'
+  createdAt: number
+  updatedAt: number
+}
+
+export interface ChannelModel {
+  id: string
+  label: string
+  apiMode: ApiMode
+  enabled: boolean
+}
+
+export interface ApiChannel {
+  id: string
+  name: string
+  models: ChannelModel[]
+  timeoutSeconds: number
+  codexCli: boolean
+  codexCliMode: CodexCliMode
+  healthStatus: ChannelHealthStatus
+  healthMessage: string
+  healthCheckedAt: number | null
+  healthLatencyMs: number | null
+  compatibilityStatus: ChannelCompatibilityStatus
+  compatibilityMessage: string
+  compatibilityCheckedAt: number | null
+  isEnabled: boolean
+  createdAt: number
+  updatedAt: number
+}
+
+export interface AdminApiChannel extends ApiChannel {
+  baseUrl: string
+  apiKeyPreview: string
+}
+
+export interface ApiChannelDraft {
+  name: string
+  baseUrl: string
+  apiKey: string
+  models: ChannelModel[]
+  timeoutSeconds: number
+  codexCli: boolean
+  codexCliMode: CodexCliMode
+  isEnabled: boolean
+}
+
+export type TemplateVisibility = 'private' | 'public'
+export type TemplateSubmissionStatus = 'draft' | 'submitted' | 'approved' | 'rejected'
+
+export interface AuditLog {
+  id: string
+  actorUserId?: string | null
+  actorUsername?: string | null
+  action: string
+  resourceType: string
+  resourceId?: string | null
+  details: Record<string, unknown>
+  createdAt: number
+}
+
+export interface GenerationQueueStats {
+  workerCount: number
+  queuedCount: number
+  runningCount: number
+  yourQueuedCount: number
+  yourRunningCount: number
+}
+
+export interface SystemBackupPreview {
+  version: number
+  exportedAt?: number | null
+  tableCounts: Record<string, number>
+  assetFileCount: number
+  hasAdminUser: boolean
+  totalRecords: number
+}
+
+export interface ProjectBoard {
+  id: string
+  name: string
+  description: string
+  color: string
+  isArchived: boolean
+  taskCount: number
+  templateCount: number
+  createdAt: number
+  updatedAt: number
+}
+
+export interface ProjectBoardDraft {
+  name: string
+  description: string
+  color: string
+  isArchived?: boolean
 }
 
 // ===== 任务参数 =====
@@ -60,11 +147,39 @@ export const DEFAULT_PARAMS: TaskParams = {
   n: 1,
 }
 
+export interface GenerationDiagnostic {
+  code: string
+  level: 'info' | 'warning' | 'error'
+  title: string
+  detail: string
+  hint?: string
+}
+
+export interface GenerationPreflight {
+  ok: boolean
+  predictedApiMode: ApiMode
+  codexCli: boolean
+  normalizedParams: TaskParams
+  diagnostics: GenerationDiagnostic[]
+}
+
 // ===== 提示词模板 =====
+
+export interface TemplateFormField {
+  key: string
+  label: string
+  type: 'text' | 'textarea' | 'select' | 'color' | 'number' | 'image'
+  required: boolean
+  defaultValue: string
+  options: string[]
+  placeholder: string
+  helpText: string
+}
 
 export interface PromptTemplate {
   id: string
   userId?: string | null
+  projectId?: string | null
   title: string
   description: string
   prompt: string
@@ -72,11 +187,38 @@ export interface PromptTemplate {
   tags: string[]
   category: string
   params: TaskParams
+  channelId?: string | null
   apiMode: ApiMode
   model: string
   coverImageId?: string | null
+  externalCoverUrl?: string | null
+  exampleImages: string[]
+  recommendedChannelId?: string | null
+  recommendedApiMode?: ApiMode | null
+  recommendedModel?: string
   linkedTaskIds: string[]
   isFavorite: boolean
+  sourceName?: string
+  sourceUrl?: string
+  sourceAuthor?: string
+  licenseName?: string
+  formFields: TemplateFormField[]
+  collections: string[]
+  isFeatured: boolean
+  visibility: TemplateVisibility
+  submissionStatus: TemplateSubmissionStatus
+  submittedAt?: number | null
+  reviewedAt?: number | null
+  reviewedBy?: string | null
+  rejectionReason?: string | null
+  favoriteCount: number
+  usageCount: number
+  successCount: number
+  failureCount: number
+  ratingCount: number
+  averageRating: number
+  lastUsedAt?: number | null
+  qualityScore: number
   version: number
   createdAt: number
   updatedAt: number
@@ -90,11 +232,25 @@ export interface PromptTemplateDraft {
   tags: string[]
   category: string
   params: TaskParams
+  channelId?: string | null
   apiMode: ApiMode
   model: string
   coverImageId?: string | null
+  externalCoverUrl?: string | null
+  exampleImages?: string[]
+  recommendedChannelId?: string | null
+  recommendedApiMode?: ApiMode | null
+  recommendedModel?: string
   linkedTaskIds?: string[]
   isFavorite?: boolean
+  sourceName?: string
+  sourceUrl?: string
+  sourceAuthor?: string
+  licenseName?: string
+  projectId?: string | null
+  formFields?: TemplateFormField[]
+  collections?: string[]
+  isFeatured?: boolean
 }
 
 export interface TemplateFilters {
@@ -102,6 +258,160 @@ export interface TemplateFilters {
   category: string
   tag: string
   favoriteOnly: boolean
+  scope: 'all' | 'public' | 'review'
+  sort: 'updated' | 'popular' | 'quality' | 'used'
+  collection: string
+}
+
+export interface OpenPromptSourceStatus {
+  id: string
+  label: string
+  repoUrl: string
+  licenseName: string
+  importedCount: number
+  lastSyncedAt?: number | null
+  lastCreated: number
+  lastUpdated: number
+  lastSkipped: number
+}
+
+export interface OpenPromptPreviewItem {
+  key: string
+  title: string
+  prompt: string
+  image: string
+  sourceUrl: string
+  sourceAuthor: string
+  sourceName: string
+  licenseName: string
+  category: string
+  tags: string[]
+  qualityScore: number
+  isDuplicate: boolean
+}
+
+export interface OpenPromptPreview {
+  source: string
+  label: string
+  licenseName: string
+  repoUrl: string
+  total: number
+  loaded: number
+  truncated: boolean
+  newCount: number
+  duplicateCount: number
+  highQualityCount: number
+  highQualityNewCount: number
+  items: OpenPromptPreviewItem[]
+}
+
+export interface AutoImportSettings {
+  enabled: boolean
+  runHour: number
+  githubTokenPreview: string
+  searchQueries: string[]
+  trustedRepos: string[]
+  includeKnownSources: boolean
+  autoApproveTrusted: boolean
+  maxRepositories: number
+  maxTemplatesPerRun: number
+  minHotScore: number
+  lastRunAt?: number | null
+  nextRunAt?: number | null
+  updatedAt?: number | null
+}
+
+export interface AutoImportSettingsPatch {
+  enabled?: boolean
+  runHour?: number
+  githubToken?: string
+  searchQueries?: string[]
+  trustedRepos?: string[]
+  includeKnownSources?: boolean
+  autoApproveTrusted?: boolean
+  maxRepositories?: number
+  maxTemplatesPerRun?: number
+  minHotScore?: number
+}
+
+export interface AutoImportRun {
+  id: string
+  status: 'running' | 'done' | 'error'
+  trigger: 'manual' | 'scheduled'
+  startedAt: number
+  finishedAt?: number | null
+  discoveredRepositories: number
+  selectedRepositories: number
+  created: number
+  updated: number
+  skipped: number
+  submitted: number
+  approved: number
+  message: string
+  details: Record<string, unknown>
+}
+
+export interface OpenPromptDiscovery {
+  id: string
+  sourceId: string
+  label: string
+  repoUrl: string
+  description: string
+  stars: number
+  forks: number
+  hotScore: number
+  promptCount: number
+  licenseName: string
+  lastSeenAt: number
+  lastImportedAt?: number | null
+  lastStatus: string
+  lastMessage: string
+}
+
+export interface TemplateSample {
+  imageId: string
+  taskId?: string | null
+  templateId: string
+  templateVersionId?: string | null
+  prompt: string
+  params: TaskParams
+  channelId?: string | null
+  apiMode?: ApiMode | null
+  model?: string | null
+  width?: number | null
+  height?: number | null
+  elapsed?: number | null
+  createdAt: number
+}
+
+export interface TemplateVersion {
+  id: string
+  templateId: string
+  version: number
+  snapshot: Partial<PromptTemplate>
+  createdBy?: string | null
+  createdAt: number
+}
+
+export interface PromptOptimizeResult {
+  prompt: string
+  method: 'local' | 'responses'
+  changed: boolean
+}
+
+export interface ChannelLeaderboardItem {
+  channelId?: string | null
+  channelName: string
+  model: string
+  apiMode?: ApiMode | null
+  totalCount: number
+  successCount: number
+  failureCount: number
+  successRate: number
+  averageElapsed?: number | null
+  lastUsedAt?: number | null
+  healthStatus: ChannelHealthStatus
+  compatibilityStatus: ChannelCompatibilityStatus
 }
 
 // ===== 输入图片（UI 层面） =====
@@ -121,7 +431,7 @@ export interface MaskDraft {
 
 // ===== 任务记录 =====
 
-export type TaskStatus = 'running' | 'done' | 'error'
+export type TaskStatus = 'queued' | 'running' | 'done' | 'error' | 'canceled'
 
 export interface TaskRecord {
   id: string
@@ -129,6 +439,10 @@ export interface TaskRecord {
   templateId?: string
   /** 来源模板版本，预留给后端/未来模板版本管理 */
   templateVersionId?: string
+  projectId?: string | null
+  parentTaskId?: string | null
+  experimentId?: string | null
+  variationLabel?: string | null
   prompt: string
   params: TaskParams
   /** API 返回的实际生效参数，用于标记与请求值不一致的情况 */
@@ -151,6 +465,10 @@ export interface TaskRecord {
   elapsed: number | null
   /** 是否收藏 */
   isFavorite?: boolean
+  diagnostics?: GenerationDiagnostic[]
+  channelId?: string | null
+  apiMode?: ApiMode | null
+  model?: string | null
 }
 
 // ===== IndexedDB 存储的图片 =====
@@ -175,6 +493,7 @@ export interface ServerAsset {
   height?: number | null
   sizeBytes: number
   hasThumbnail?: boolean
+  visualHash?: string | null
   createdAt: number
 }
 
@@ -189,57 +508,6 @@ export interface ImageGenerationRequest {
   moderation: string
   output_compression?: number
   n?: number
-}
-
-// ===== API 响应 =====
-
-export interface ImageResponseItem {
-  b64_json?: string
-  url?: string
-  revised_prompt?: string
-  size?: string
-  quality?: string
-  output_format?: string
-  output_compression?: number
-  moderation?: string
-}
-
-export interface ImageApiResponse {
-  data: ImageResponseItem[]
-  size?: string
-  quality?: string
-  output_format?: string
-  output_compression?: number
-  moderation?: string
-  n?: number
-}
-
-export interface ResponsesOutputItem {
-  type?: string
-  result?: string | {
-    b64_json?: string
-    image?: string
-    data?: string
-  }
-  size?: string
-  quality?: string
-  output_format?: string
-  output_compression?: number
-  moderation?: string
-  revised_prompt?: string
-}
-
-export interface ResponsesApiResponse {
-  output?: ResponsesOutputItem[]
-  tools?: Array<{
-    type?: string
-    size?: string
-    quality?: string
-    output_format?: string
-    output_compression?: number
-    moderation?: string
-    n?: number
-  }>
 }
 
 // ===== 导出数据 =====

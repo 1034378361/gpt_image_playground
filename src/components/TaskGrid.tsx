@@ -1,19 +1,24 @@
 import { useMemo, useRef, useState, useEffect } from 'react'
 import { useStore, reuseConfig, editOutputs, removeTask } from '../store'
+import { cancelTask, refreshQueueStats } from '../storeBackend'
 import TaskCard from './TaskCard'
+import GenerationQueueStatus from './GenerationQueueStatus'
 
 export default function TaskGrid() {
   const tasks = useStore((s) => s.tasks)
   const searchQuery = useStore((s) => s.searchQuery)
   const filterStatus = useStore((s) => s.filterStatus)
   const filterFavorite = useStore((s) => s.filterFavorite)
+  const currentProjectId = useStore((s) => s.currentProjectId)
   const setDetailTaskId = useStore((s) => s.setDetailTaskId)
   const setConfirmDialog = useStore((s) => s.setConfirmDialog)
   const selectedTaskIds = useStore((s) => s.selectedTaskIds)
   const setSelectedTaskIds = useStore((s) => s.setSelectedTaskIds)
   const clearSelection = useStore((s) => s.clearSelection)
   const hasOverlayOpen = useStore((s) =>
-    Boolean(s.detailTaskId || s.lightboxImageId || s.maskEditorImageId || s.showSettings || s.confirmDialog),
+    Boolean(
+      s.detailTaskId || s.lightboxImageId || s.maskEditorImageId || s.showSettings || s.showProjectManager || s.confirmDialog,
+    ),
   )
 
   const rootRef = useRef<HTMLDivElement>(null)
@@ -34,6 +39,8 @@ export default function TaskGrid() {
     
     return sorted.filter((t) => {
       if (filterFavorite && !t.isFavorite) return false
+      if (currentProjectId === '__unassigned__' && t.projectId) return false
+      if (currentProjectId && currentProjectId !== '__unassigned__' && t.projectId !== currentProjectId) return false
       const matchStatus = filterStatus === 'all' || t.status === filterStatus
       if (!matchStatus) return false
       
@@ -42,7 +49,17 @@ export default function TaskGrid() {
       const paramStr = JSON.stringify(t.params).toLowerCase()
       return prompt.includes(q) || paramStr.includes(q)
     })
-  }, [tasks, searchQuery, filterStatus, filterFavorite])
+  }, [currentProjectId, tasks, searchQuery, filterStatus, filterFavorite])
+  const hasActiveTask = tasks.some((task) => task.status === 'queued' || task.status === 'running')
+
+  useEffect(() => {
+    if (!hasActiveTask) return
+    void refreshQueueStats()
+    const timer = window.setInterval(() => {
+      void refreshQueueStats()
+    }, 3000)
+    return () => window.clearInterval(timer)
+  }, [hasActiveTask])
 
   const handleDelete = (task: typeof tasks[0]) => {
     setConfirmDialog({
@@ -166,37 +183,37 @@ export default function TaskGrid() {
 
   if (!filteredTasks.length) {
     return (
-      <div className="text-center py-20 text-gray-400 dark:text-gray-500">
-        {searchQuery || filterFavorite ? (
-          <p className="text-sm">没有找到匹配的记录</p>
-        ) : (
-          <>
-            <svg
-              className="w-16 h-16 mx-auto mb-4 text-gray-200 dark:text-gray-700"
-              fill="none"
-              stroke="currentColor"
-              viewBox="0 0 24 24"
-            >
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                strokeWidth={1}
-                d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"
-              />
-            </svg>
-            <p className="text-sm">输入提示词开始生成图片</p>
-          </>
-        )}
-      </div>
+      <>
+        <GenerationQueueStatus />
+        <div className="text-center py-20 text-gray-400 dark:text-gray-500">
+          {searchQuery || filterFavorite ? (
+            <p className="text-sm">没有找到匹配的记录</p>
+          ) : (
+            <>
+              <svg
+                className="w-16 h-16 mx-auto mb-4 text-gray-200 dark:text-gray-700"
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={1}
+                  d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"
+                />
+              </svg>
+              <p className="text-sm">输入提示词开始生成图片</p>
+            </>
+          )}
+        </div>
+      </>
     )
   }
 
   return (
-    <div 
-      ref={rootRef}
-      data-task-grid-root
-      className="relative min-h-[50vh]"
-    >
+    <div ref={rootRef} data-task-grid-root className="relative min-h-[50vh]">
+      <GenerationQueueStatus />
       <div ref={gridRef} className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 pb-10">
         {filteredTasks.map((task) => (
           <div key={task.id} className="task-card-wrapper" data-task-id={task.id}>
@@ -221,6 +238,7 @@ export default function TaskGrid() {
               onReuse={() => reuseConfig(task)}
               onEditOutputs={() => editOutputs(task)}
               onDelete={() => handleDelete(task)}
+              onCancel={() => cancelTask(task)}
               isSelected={selectedTaskIds.includes(task.id)}
             />
           </div>

@@ -1,15 +1,8 @@
 # GPT Image Playground
 
-基于 OpenAI 图像生成接口的图片生成与编辑工具。提供简洁的 Web UI，支持文本生成图片、参考图编辑、可视化参数调节、历史记录管理与本地数据导入导出。
+基于 OpenAI 图像生成接口的图片生成与编辑工具。当前版本已经改为前后端一体化使用：前端负责界面，FastAPI 后端统一负责登录、渠道配置、模板审核、任务与图片数据存储。
 
-
-> 如有调用非本地的 HTTP API 的需求，请使用 GitHub Pages 版本或自行部署，因为 `.dev` 域名要求页面本身及其加载的资源（的来源）均为 HTTPS。
-
-**Vercel 部署版本在线体验：** 
-https://gpt-image-playground.cooksleep.dev
-
-**GitHub Pages 部署版本在线体验：**
-https://cooksleep.github.io/gpt_image_playground
+> 当前版本不能再单独作为纯静态站点使用。无论是本地、Docker 还是线上环境，都需要同时提供同源 `/api/*` 后端。
 
 ---
 
@@ -58,7 +51,7 @@ https://cooksleep.github.io/gpt_image_playground
 - **遮罩编辑**：支持在参考图上绘制遮罩后进行局部编辑。遮罩主图会按官方接口限制预处理为安全工作图，避免高分辨率图片导致提交失败。需要注意的是，根据官方文档说明，遮罩编辑仍基于提示词引导模型，无法完全控制模型实际编辑区域。
 - **接口模式切换**：支持在设置中选择 Images API (`/v1/images`) 或 Responses API (`/v1/responses`)。
 - **批量生成**：单次可设置生成多张图片。
-- **Codex CLI 兼容模式**：可在设置中开启 Codex CLI 模式。开启后根据 Codex CLI 中的实际可用能力，将质量参数固定为 `auto` 且不会发送 `quality` 字段；Images API 的多图生成会拆分为多个并发请求完成，解决该 API 数量参数无效的问题；提示词文本开头会加入简短的不改写要求，避免模型重写提示词，偏离原意。
+- **Codex CLI 兼容模式**：管理员可为渠道选择自动检测、标准 OpenAI 或 Codex CLI。自动检测会先按标准请求，若上游明确不支持 `quality` 参数，则自动切换为兼容模式并重试。
 
 ### ⚙️ 精细化参数控制
 - **智能尺寸选择器**：支持 `auto`、按 `1K / 2K / 4K` 结合常用比例自动计算分辨率，同时也支持手动输入自定义宽高。
@@ -80,31 +73,27 @@ https://cooksleep.github.io/gpt_image_playground
 - **响应式布局**：桌面端提供更高效的批量选择与底部输入栏，移动端输入栏可折叠，并针对侧滑、多选和弹窗交互做了适配。
 - **PWA 支持**：支持渐进式 Web 应用（PWA），可将网页作为独立应用安装到桌面或移动设备主屏幕，提供类似原生 App 的沉浸式体验，并适配 iOS PWA 顶部安全区。
 
-### 💾 本地数据优先
-- **IndexedDB 存储**：所有任务记录与图片数据均存储在浏览器的 IndexedDB 中，数据绝不离开本地。
-- **性能优化**：参考图采用内存缓存与延迟存储机制，图片采用 SHA-256 哈希自动去重，并在每次启动时自动清理孤立的图片碎片。
-- **导入与导出**：支持将完整数据打包为 ZIP 导出。导出的 ZIP 内包含原始图片文件（非 base64）和记录图片元数据的 `manifest.json`，方便备份与迁移。
+### 💾 后端统一管理
+- **登录后使用**：访问前端时需要先登录；系统没有账号时，首个注册用户会自动成为管理员。
+- **服务端配置**：Base URL、API Key、渠道模型和请求超时只由管理员在后端配置，普通用户只能选择管理员开放的渠道与模型。
+- **模板审核**：用户可以创建私有模板，并提交到公共模板库；公共模板需要管理员审批后才会对所有用户可见。
+- **角色细分**：除管理员外，还支持审核员角色；审核员可以处理公共模板审核与开源模板导入，但不能查看渠道密钥、用户角色或服务端备份。
+- **服务端备份**：管理员设置中的导入/导出会直接备份和恢复后端数据库与图片资源，不再依赖浏览器本地缓存。
 
 ---
 
 ## 🚀 部署与使用
 
-支持多种部署与使用方式，推荐使用 Vercel 一键部署。
+前端需要配合 FastAPI 后端使用。开发环境下，Vite 会把 `/api/*` 代理到 `http://127.0.0.1:8000`。
 
 <details>
-<summary><strong>▲ 方式一：Vercel 一键部署 (推荐)</strong></summary>
+<summary><strong>▲ 方式一：Vercel 部署前端壳 + 自己提供同源后端</strong></summary>
 
 [![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2FCookSleep%2Fgpt_image_playground&project-name=gpt-image-playground&repository-name=gpt-image-playground)
 
-点击上方按钮后，按 Vercel 页面提示导入仓库即可。项目已包含 `vercel.json`，Vercel 会自动执行 `npm install`、`npm run build`，并将 `dist/` 作为静态输出目录。
+点击上方按钮后，Vercel 只会构建并托管前端静态资源。你仍然必须额外提供 FastAPI 后端，并把站点的 `/api/*` 反向代理到后端服务，否则页面会直接提示“当前部署缺少后端”。
 
-如需预置默认 API 节点，可在 Vercel 项目的 **Settings → Environment Variables** 中添加：
-
-```bash
-VITE_DEFAULT_API_URL=https://api.openai.com/v1
-```
-
-部署完成后，打开 Vercel 分配的域名，在页面右上角设置中填入 API Key 即可使用。
+部署完成后，登录管理员账号，在管理员设置中维护上游渠道、模型、API Key、Base URL 和请求超时。
 
 **更新说明：**
 
@@ -116,115 +105,106 @@ VITE_DEFAULT_API_URL=https://api.openai.com/v1
 </details>
 
 <details>
-<summary><strong>🐳 方式二：Docker 部署</strong></summary>
+<summary><strong>🐳 方式二：Docker Compose（推荐 NAS 使用）</strong></summary>
 
-项目已将镜像发布至 GitHub Container Registry。你可以通过环境变量 `API_URL` 注入默认的 API 节点。
+当前仓库已经提供可直接用于 NAS 的双容器部署：
 
-**使用 Docker CLI：**
+- `frontend`：提供前端页面，并把 `/api/*` 同源转发给后端
+- `backend`：FastAPI + SQLite + 图片资源存储
 
-```bash
-docker run -d -p 8080:80 \
-  -e API_URL=https://api.openai.com/v1 \
-  ghcr.io/cooksleep/gpt_image_playground:latest
-```
+### 1. 准备环境文件
 
-**使用 Docker Compose：**
-
-```yaml
-services:
-  gpt-image-playground:
-    image: ghcr.io/cooksleep/gpt_image_playground:latest
-    environment:
-      - API_URL=https://api.openai.com/v1
-    ports:
-      - "8080:80"
-    restart: unless-stopped
-```
-
-浏览器访问 `http://localhost:8080`，在页面右上角设置中填入 API Key 即可使用。
-
-*(注：官方镜像同时提供带版本号的标签，如 `0.1.11` 或 `0.1`)*
-
-**更新说明：**
-
-- 使用 `latest` 标签时，重新拉取镜像并重启容器即可更新到最新发布版本。
-- 如果希望固定版本，建议使用明确版本号标签，例如 `ghcr.io/cooksleep/gpt_image_playground:0.2.3`。
-- Docker Compose 更新示例：
+把 `deploy/nas.env.example` 复制为 `.env`，按需修改：
 
 ```bash
-docker compose pull
-docker compose up -d
+cp deploy/nas.env.example .env
 ```
+
+至少建议确认这几个值：
+
+- `GIP_HTTP_PORT=8080`
+- `GIP_SESSION_SECURE=false`
+- `GIP_CORS_ORIGINS=http://你的NAS地址:8080`
+
+如果你会通过 NAS 自带反向代理或 Nginx Proxy Manager 用 HTTPS 暴露出去，请改成：
+
+```env
+GIP_SESSION_SECURE=true
+```
+
+如果你的前端容器需要代理到另一台机器上的后端，也可以额外改：
+
+```env
+GIP_BACKEND_UPSTREAM=http://你的后端地址:8000
+```
+
+### 2. 启动容器
+
+```bash
+docker compose up -d --build
+```
+
+启动后浏览器访问：
+
+```text
+http://你的NAS地址:8080
+```
+
+系统里还没有账号时，**首个注册用户会自动成为管理员**。
+
+### 3. 数据持久化
+
+Compose 已经默认把下面的目录挂载到宿主机：
+
+```text
+./backend/data
+```
+
+其中包含：
+
+- `app.sqlite3`
+- `assets/`
+- `restore-points/`
+
+所以你在 NAS 里只需要备份 `backend/data` 这个目录即可。
+
+### 4. 更新
+
+```bash
+docker compose up -d --build
+```
+
+如果你是先 `git pull` 再更新，这一条就够了。
+
+### 5. 说明
+
+- Compose 用的是：
+  - `deploy/Dockerfile.frontend`
+  - `deploy/Dockerfile.backend`
+  - `deploy/nginx.docker.conf`
+- `deploy/Dockerfile` 也已经切到同样的反向代理模式，适合单独构建前端壳镜像后再自己指定后端上游
+- 如果你是飞牛 NAS，可直接参考 `deploy/FN_NAS_DEPLOY.md`
+- 如果你想改成单镜像部署，可参考 `deploy/FN_NAS_SINGLE_IMAGE.md`、`deploy/Dockerfile.all-in-one` 和 `docker-compose.single.yml`
+- 如果你不使用内置 `frontend` 容器，而是自己已有反向代理，也可以参考 `deploy/nginx.reverse-proxy.conf.example`
 
 </details>
 
 <details>
 <summary><strong>💻 方式三：本地开发与自行构建</strong></summary>
 
-1. **环境准备 (可选)**
-   你可以在项目根目录新建 `.env.local` 文件，配置构建时的默认 API URL：
-   ```bash
-   VITE_DEFAULT_API_URL=https://api.openai.com/v1
-   ```
-
-2. **安装依赖与启动开发服务器**
+1. **安装依赖与启动开发服务器**
    ```bash
    npm install
+   npm run backend:dev
    npm run dev
    ```
-   随后浏览器访问 `http://localhost:5173`。
+   随后浏览器访问 `http://localhost:5173`，首个注册用户会成为管理员。
 
-3. **本地开发跨域代理（可选）**
-   如果你的图片接口没有放开浏览器跨域，前端直接请求接口时可能会被浏览器的 CORS 策略拦截。这个可选代理用于本地开发调试：浏览器先请求同源的 Vite 开发服务器，再由 Vite 开发服务器转发到真实接口。
-
-   请求链路如下：
-
-   ```text
-   浏览器页面 http://localhost:5173
-     -> 同源请求 http://localhost:5173/api-proxy/v1/images/generations
-     -> Vite 开发服务器代理转发
-     -> 真实接口 http://127.0.0.1:3000/v1/images/generations
-   ```
-
-   选择 Responses API 时，同一代理配置会将请求改写为 `/api-proxy/v1/responses`。
-
-   这样浏览器看到的是同源请求，实际跨域请求发生在 Vite 开发服务器这一侧，从而绕开浏览器 CORS 限制。
-
-   注意：这个代理只在 `npm run dev` 启动的 Vite 开发服务器中生效。它不会打包进静态产物，也不会在 Vercel、GitHub Pages 或普通 Nginx 静态部署中生效。
-
-   先复制示例配置：
-   ```bash
-   cp dev-proxy.config.example.json dev-proxy.config.json
-   ```
-   然后修改项目根目录下的本地 `dev-proxy.config.json`：
-   ```json
-   {
-     "enabled": true,
-     "prefix": "/api-proxy",
-     "target": "http://127.0.0.1:3000",
-     "changeOrigin": true,
-     "secure": false
-   }
-   ```
-   配置含义：
-
-   - `enabled`：是否启用本地开发代理。
-   - `prefix`：前端同源请求使用的代理路径前缀。
-   - `target`：真实图片接口地址，也就是 Vite 开发服务器要转发到的后端。
-   - `changeOrigin`：转发时是否把请求头中的 `Host` 改成 `target` 的主机名，通常建议保持 `true`。
-   - `secure`：当 `target` 是 HTTPS 时是否校验证书；本地自签名证书可设为 `false`。
-
-   修改配置后需要重新启动开发服务器，并在页面设置中的 `API URL` 填入与 `target` 相同的地址。当前端发现 `API URL` 与 `target` 匹配时，会把请求改写为 `prefix` 开头的同源地址，例如 `/api-proxy/v1/images/generations` 或 `/api-proxy/v1/responses`。
-
-   > 如果 `target` 或填入的 `API URL` 已经包含了 `/v1` 路径，则同源请求的路径将不再重复拼接 `/v1`，例如会直接变为 `/api-proxy/responses`
-
-   如果需要在线上部署中使用代理，请使用 Vercel Function、Cloudflare Worker、Nginx 反向代理或自建后端等服务端方案。
-
-4. **构建静态产物**
+2. **构建前端静态产物**
    ```bash
    npm run build
    ```
-   构建输出的文件会存放在 `dist/` 目录下，你可以将其部署到任何静态文件服务器（如 Nginx、Vercel、Netlify 等）。
+   构建输出的文件会存放在 `dist/` 目录下。它只是前端静态资源，线上部署时必须额外配置同源 `/api/*` 后端转发。
 
 </details>
 
@@ -232,29 +212,22 @@ docker compose up -d
 
 ## 🛠️ API 配置说明
 
-点击页面右上角的设置图标，你可以随时更改 API 相关的配置。
+管理员可以在管理员设置中维护多个渠道，每个渠道包含 Base URL、API Key、请求超时和可用模型。普通用户无法看到这些敏感配置，只能在输入区选择已启用的渠道与模型。
 
-- **Images API**：调用 `/v1/images/generations` 和 `/v1/images/edits`，模型需要填写 GPT Image 模型，例如 `gpt-image-2`。
-- **Responses API**：调用 `/v1/responses` 并使用 `image_generation` 工具，模型需要填写支持该工具的文本模型，例如 `gpt-5.5`。
-- **Codex CLI 模式**：如果你在使用源于 Codex CLI 的 API，可以在 `API URL` 右侧开启该模式。开启后应用不会向任何接口发送 `quality` 参数，界面中的质量选项也会固定为 `auto`；同时会在提示词文本开头加入简短的不改写要求，避免模型重写提示词，偏离原意。
-- Codex CLI 模式下，Images API 的图片数量会通过并发发起多个单图请求实现；Responses API 原本也通过并发请求实现多图生成。
-- 如果检测到接口返回的提示词被改写，应用会提示是否为当前 `API URL + API Key` 组合开启 Codex CLI 模式；取消后，同一组合不再重复询问。
+- **Images API**：后端调用 `/v1/images/generations` 和 `/v1/images/edits`，模型需要配置为 GPT Image 模型，例如 `gpt-image-2`。
+- **Responses API**：后端调用 `/v1/responses` 并使用 `image_generation` 工具，模型需要配置为支持该工具的文本模型。
+- **Codex CLI 检测**：渠道可选择自动检测、标准 OpenAI 或 Codex CLI。自动模式会先发送标准请求；如果上游返回 `quality` 参数不支持，后端会保存检测结果并自动重试，之后普通用户的质量选项会固定为 `auto`。
 
-应用支持通过 URL 查询参数快速填充配置，非常适合书签或分享给他人使用：
-- `?apiUrl=https://你的代理地址.com`
-- `?apiKey=sk-xxxx`
-- `?apiMode=images` 或 `?apiMode=responses`，未传时默认使用 `images`
-- `?codexCli=true` 或 `?codexCli=false`，未传时默认关闭，仅 `true` 会开启 Codex CLI 模式
+---
 
-例如：
-- 接入 New API 聊天应用：
-  ```
-  https://gpt-image-playground.cooksleep.dev?apiUrl={address}&apiKey={key}
-  ```
+## 🔐 上线前检查
 
-  ```
-  https://cooksleep.github.io/gpt_image_playground?apiUrl={address}&apiKey={key}
-  ```
+- 前端和 FastAPI 后端必须同域部署，并把 `/api/*` 反向代理到后端。
+- 线上务必开启 HTTPS，并将 `GIP_SESSION_SECURE=true`。
+- 建议把 SQLite 数据目录和 `restore-points/` 纳入服务器备份策略。
+- 首个管理员创建完成后，建议再额外保留至少一个管理员账号，避免单点权限丢失。
+- 导入系统备份前，界面会先做预检查，后端也会自动创建恢复点。
+- NAS 场景建议只跑一个后端实例，避免多个容器同时写同一个 SQLite 文件。
 
 ---
 
@@ -264,7 +237,7 @@ docker compose up -d
 - **构建工具**：[Vite](https://vite.dev/)
 - **样式**：[Tailwind CSS 3](https://tailwindcss.com/)
 - **状态管理**：[Zustand](https://zustand.docs.pmnd.rs/)
-- **数据存储**：浏览器的 IndexedDB API
+- **数据存储**：FastAPI + SQLite，浏览器 IndexedDB 仅用于本地图片缓存
 
 ## 📄 许可证
 

@@ -1,14 +1,18 @@
 import React, { useEffect, useState, useRef } from 'react'
 import { useStore, addImageFromUrl, setTemplateCover } from '../store'
 import { copyBlobToClipboard, getClipboardFailureMessage } from '../lib/clipboard'
+import { copyAssetToSystemClipboard, listSimilarTemplates } from '../lib/backendApi'
 
 export default function ImageContextMenu() {
   const [menuInfo, setMenuInfo] = useState<{ src: string; x: number; y: number; imageId?: string; templateId?: string } | null>(null)
   const showToast = useStore((s) => s.showToast)
+  const settings = useStore((s) => s.settings)
   const inputImages = useStore((s) => s.inputImages)
   const setDetailTaskId = useStore((s) => s.setDetailTaskId)
   const setLightboxImageId = useStore((s) => s.setLightboxImageId)
   const setMaskEditorImageId = useStore((s) => s.setMaskEditorImageId)
+  const setCurrentView = useStore((s) => s.setCurrentView)
+  const setSelectedTemplateId = useStore((s) => s.setSelectedTemplateId)
   const menuRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -69,15 +73,30 @@ export default function ImageContextMenu() {
 
   const handleCopy = async (e: React.MouseEvent) => {
     e.stopPropagation()
+    const copyTarget = menuInfo
     setMenuInfo(null)
+    if (!copyTarget) return
     try {
-      const res = await fetch(menuInfo.src)
+      if (copyTarget.imageId) {
+        await copyAssetToSystemClipboard(settings, copyTarget.imageId)
+        showToast('图片已复制到系统剪贴板', 'success')
+        return
+      }
+      const res = await fetch(copyTarget.src)
       const blob = await res.blob()
       await copyBlobToClipboard(blob)
       showToast('图片已复制', 'success')
     } catch (err) {
       console.error(err)
-      showToast(getClipboardFailureMessage('复制失败', err), 'error')
+      try {
+        const res = await fetch(copyTarget.src)
+        const blob = await res.blob()
+        await copyBlobToClipboard(blob)
+        showToast(copyTarget.imageId ? '系统剪贴板失败，已复制到浏览器剪贴板' : '图片已复制', copyTarget.imageId ? 'error' : 'success')
+      } catch (fallbackErr) {
+        console.error(fallbackErr)
+        showToast(getClipboardFailureMessage('复制失败', fallbackErr), 'error')
+      }
     }
   }
 
@@ -135,11 +154,32 @@ export default function ImageContextMenu() {
     }
   }
 
+  const handleFindSimilar = async (e: React.MouseEvent) => {
+    e.stopPropagation()
+    if (!menuInfo.imageId) return
+    const imageId = menuInfo.imageId
+    setMenuInfo(null)
+    try {
+      const matches = await listSimilarTemplates(settings, { assetId: imageId, limit: 8 })
+      if (!matches.length) {
+        showToast('没有找到相似模板', 'info')
+        return
+      }
+      setLightboxImageId(null)
+      setDetailTaskId(null)
+      setCurrentView('templates')
+      setSelectedTemplateId(matches[0].id)
+      showToast(`找到 ${matches.length} 个相似模板`, 'success')
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : String(err), 'error')
+    }
+  }
+
   // 保证菜单在视口内
   let left = menuInfo.x
   let top = menuInfo.y
   const MENU_WIDTH = 120
-  const MENU_HEIGHT = menuInfo.imageId && menuInfo.templateId ? 168 : 128
+  const MENU_HEIGHT = menuInfo.imageId && menuInfo.templateId ? 208 : menuInfo.imageId ? 168 : 128
 
   if (left + MENU_WIDTH > window.innerWidth) {
     left -= MENU_WIDTH
@@ -191,6 +231,17 @@ export default function ImageContextMenu() {
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16l4-4 4 4 8-8" />
           </svg>
           设封面
+        </button>
+      )}
+      {menuInfo.imageId && (
+        <button
+          onClick={handleFindSimilar}
+          className="w-full px-4 py-2 text-left text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700/50 flex items-center gap-2 transition-colors"
+        >
+          <svg className="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-4.35-4.35M10.5 18a7.5 7.5 0 1 1 0-15 7.5 7.5 0 0 1 0 15z" />
+          </svg>
+          相似
         </button>
       )}
     </div>

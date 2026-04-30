@@ -1,7 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { DEFAULT_PARAMS, DEFAULT_SETTINGS } from './types'
 import type { TaskRecord } from './types'
-import { editOutputs, submitTask, useStore } from './store'
+import { editOutputs, useStore } from './store'
+import { submitTask } from './storeBackend'
 
 const imageA = { id: 'image-a', dataUrl: 'data:image/png;base64,a' }
 
@@ -26,7 +27,19 @@ function task(overrides: Partial<TaskRecord> = {}): TaskRecord {
 describe('mask draft lifecycle in store actions', () => {
   beforeEach(() => {
     useStore.setState({
-      settings: { ...DEFAULT_SETTINGS, apiKey: 'test-key', storageMode: 'local', generationMode: 'direct' },
+      settings: {
+        ...DEFAULT_SETTINGS,
+        channelId: 'channel-a',
+        model: 'gpt-image-2',
+        apiMode: 'images',
+      },
+      backendUser: {
+        id: 'user-a',
+        username: 'alice',
+        role: 'user',
+        createdAt: 1,
+        updatedAt: 1,
+      },
       prompt: 'prompt',
       inputImages: [],
       maskDraft: null,
@@ -41,6 +54,7 @@ describe('mask draft lifecycle in store actions', () => {
       confirmDialog: null,
       showToast: vi.fn(),
       setConfirmDialog: vi.fn(),
+      setShowSettings: vi.fn(),
     })
   })
 

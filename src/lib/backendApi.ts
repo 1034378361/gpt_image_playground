@@ -1,15 +1,70 @@
 import type {
+  AdminUser,
+  AdminApiChannel,
+  ApiChannel,
+  ApiChannelDraft,
   AppSettings,
+  AutoImportRun,
+  AutoImportSettings,
+  AutoImportSettingsPatch,
+  AuditLog,
   BackendUser,
+  ChannelLeaderboardItem,
+  GenerationQueueStats,
+  OpenPromptDiscovery,
+  OpenPromptSourceStatus,
+  OpenPromptPreview,
+  PromptOptimizeResult,
   PromptTemplate,
   PromptTemplateDraft,
+  ProjectBoard,
+  ProjectBoardDraft,
   ServerAsset,
+  GenerationPreflight,
+  SystemBackupPreview,
   TaskRecord,
+  TemplateSample,
+  TemplateVersion,
 } from '../types'
 
-function apiBase(settings: AppSettings): string {
-  const base = settings.backendUrl.trim().replace(/\/+$/, '')
-  return base ? `${base}/api` : '/api'
+export type OpenPromptLibrarySourceId = 'evolink' | 'zerolu' | 'imgedify'
+
+export const OPEN_PROMPT_LIBRARY_SOURCES: Array<{
+  id: OpenPromptLibrarySourceId
+  label: string
+  licenseNote: string
+}> = [
+  {
+    id: 'evolink',
+    label: 'EvoLinkAI',
+    licenseNote: 'README 标注 CC BY 4.0，仓库 LICENSE 为 Apache-2.0',
+  },
+  {
+    id: 'zerolu',
+    label: 'ZeroLu GPT Image',
+    licenseNote: 'MIT',
+  },
+  {
+    id: 'imgedify',
+    label: 'ImgEdify GPT4o',
+    licenseNote: 'MIT',
+  },
+]
+
+function apiBase(): string {
+  return '/api'
+}
+
+export function getHealth(): Promise<{ ok: boolean }> {
+  return fetch(`${apiBase()}/health`, {
+    credentials: 'include',
+    headers: { Accept: 'application/json' },
+  }).then(async (response) => {
+    if (!response.ok) {
+      throw new Error(await readError(response))
+    }
+    return response.json() as Promise<{ ok: boolean }>
+  })
 }
 
 async function readError(response: Response): Promise<string> {
@@ -29,7 +84,7 @@ async function readError(response: Response): Promise<string> {
 }
 
 async function request<T>(settings: AppSettings, path: string, init: RequestInit = {}): Promise<T> {
-  const response = await fetch(`${apiBase(settings)}${path}`, {
+  const response = await fetch(`${apiBase()}${path}`, {
     ...init,
     credentials: 'include',
     headers: {
@@ -68,8 +123,167 @@ export function logout(settings: AppSettings): Promise<{ ok: boolean }> {
   return request(settings, '/auth/logout', { method: 'POST' })
 }
 
-export function listTemplates(settings: AppSettings): Promise<PromptTemplate[]> {
-  return request(settings, '/templates')
+export function listChannels(settings: AppSettings): Promise<ApiChannel[]> {
+  return request(settings, '/channels')
+}
+
+export function listProjects(settings: AppSettings): Promise<ProjectBoard[]> {
+  return request(settings, '/projects')
+}
+
+export function createProject(settings: AppSettings, payload: ProjectBoardDraft): Promise<ProjectBoard> {
+  return request(settings, '/projects', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
+export function patchProject(
+  settings: AppSettings,
+  projectId: string,
+  payload: Partial<ProjectBoardDraft>,
+): Promise<ProjectBoard> {
+  return request(settings, `/projects/${projectId}`, {
+    method: 'PATCH',
+    body: JSON.stringify(payload),
+  })
+}
+
+export function deleteProject(settings: AppSettings, projectId: string): Promise<{ ok: boolean }> {
+  return request(settings, `/projects/${projectId}`, { method: 'DELETE' })
+}
+
+export function listChannelLeaderboard(settings: AppSettings): Promise<ChannelLeaderboardItem[]> {
+  return request(settings, '/channels/leaderboard')
+}
+
+export function listAdminChannels(settings: AppSettings): Promise<AdminApiChannel[]> {
+  return request(settings, '/admin/channels')
+}
+
+export function createChannel(settings: AppSettings, payload: ApiChannelDraft): Promise<AdminApiChannel> {
+  return request(settings, '/admin/channels', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
+export function patchChannel(
+  settings: AppSettings,
+  channelId: string,
+  payload: Partial<ApiChannelDraft>,
+): Promise<AdminApiChannel> {
+  return request(settings, `/admin/channels/${channelId}`, {
+    method: 'PATCH',
+    body: JSON.stringify(payload),
+  })
+}
+
+export function deleteChannel(settings: AppSettings, channelId: string): Promise<{ ok: boolean }> {
+  return request(settings, `/admin/channels/${channelId}`, { method: 'DELETE' })
+}
+
+export function checkChannelHealth(settings: AppSettings, channelId: string): Promise<AdminApiChannel> {
+  return request(settings, `/admin/channels/${channelId}/health-check`, { method: 'POST' })
+}
+
+export function checkChannelCompatibility(settings: AppSettings, channelId: string): Promise<AdminApiChannel> {
+  return request(settings, `/admin/channels/${channelId}/compatibility-check`, { method: 'POST' })
+}
+
+export function listAuditLogs(settings: AppSettings, limit = 100): Promise<AuditLog[]> {
+  return request(settings, `/admin/audit-logs?limit=${encodeURIComponent(String(limit))}`)
+}
+
+export function listAdminUsers(settings: AppSettings): Promise<AdminUser[]> {
+  return request(settings, '/admin/users')
+}
+
+export function patchAdminUserRole(
+  settings: AppSettings,
+  userId: string,
+  role: AdminUser['role'],
+): Promise<AdminUser> {
+  return request(settings, `/admin/users/${encodeURIComponent(userId)}/role`, {
+    method: 'PATCH',
+    body: JSON.stringify({ role }),
+  })
+}
+
+export async function exportSystemBackup(settings: AppSettings): Promise<Blob> {
+  const response = await fetch(`${apiBase()}/admin/system/export`, {
+    credentials: 'include',
+    headers: { Accept: 'application/zip' },
+  })
+  if (!response.ok) throw new Error(await readError(response))
+  return response.blob()
+}
+
+export function previewSystemBackup(settings: AppSettings, file: File): Promise<SystemBackupPreview> {
+  const formData = new FormData()
+  formData.append('file', file)
+  return request(settings, '/admin/system/import-preview', {
+    method: 'POST',
+    body: formData,
+  })
+}
+
+export function importSystemBackup(
+  settings: AppSettings,
+  file: File,
+): Promise<{ ok: boolean; restorePointName: string }> {
+  const formData = new FormData()
+  formData.append('file', file)
+  return request(settings, '/admin/system/import', {
+    method: 'POST',
+    body: formData,
+  })
+}
+
+export function listTemplates(settings: AppSettings, scope: 'all' | 'mine' | 'public' = 'all'): Promise<PromptTemplate[]> {
+  return request(settings, `/templates?scope=${encodeURIComponent(scope)}`)
+}
+
+export function listTemplateSubmissions(settings: AppSettings): Promise<PromptTemplate[]> {
+  return request(settings, '/admin/template-submissions')
+}
+
+export function listOpenPromptSources(settings: AppSettings): Promise<OpenPromptSourceStatus[]> {
+  return request(settings, '/admin/open-prompt-sources')
+}
+
+export function getAutoImportSettings(settings: AppSettings): Promise<AutoImportSettings> {
+  return request(settings, '/admin/auto-import/settings')
+}
+
+export function patchAutoImportSettings(
+  settings: AppSettings,
+  payload: AutoImportSettingsPatch,
+): Promise<AutoImportSettings> {
+  return request(settings, '/admin/auto-import/settings', {
+    method: 'PATCH',
+    body: JSON.stringify(payload),
+  })
+}
+
+export function runAutoImport(settings: AppSettings): Promise<AutoImportRun> {
+  return request(settings, '/admin/auto-import/run', { method: 'POST' })
+}
+
+export function listAutoImportRuns(settings: AppSettings, limit = 20): Promise<AutoImportRun[]> {
+  return request(settings, `/admin/auto-import/runs?limit=${encodeURIComponent(String(limit))}`)
+}
+
+export function listOpenPromptDiscoveries(settings: AppSettings, limit = 50): Promise<OpenPromptDiscovery[]> {
+  return request(settings, `/admin/open-prompt-discoveries?limit=${encodeURIComponent(String(limit))}`)
+}
+
+export function previewOpenPromptLibraryTemplates(
+  settings: AppSettings,
+  source: OpenPromptLibrarySourceId,
+  limit = 0,
+): Promise<OpenPromptPreview> {
+  return request(settings, `/admin/templates/import-open-library/preview?source=${encodeURIComponent(source)}&limit=${encodeURIComponent(String(limit))}`)
 }
 
 export function createTemplate(settings: AppSettings, template: PromptTemplateDraft): Promise<PromptTemplate> {
@@ -105,8 +319,116 @@ export function setTemplateCover(settings: AppSettings, templateId: string, imag
   })
 }
 
+export function markTemplateUsed(settings: AppSettings, templateId: string): Promise<PromptTemplate> {
+  return request(settings, `/templates/${templateId}/use`, { method: 'POST' })
+}
+
+export function rateTemplate(settings: AppSettings, templateId: string, score: number): Promise<PromptTemplate> {
+  return request(settings, `/templates/${templateId}/rate`, {
+    method: 'POST',
+    body: JSON.stringify({ score }),
+  })
+}
+
+export function listTemplateSamples(settings: AppSettings, templateId: string, limit = 24): Promise<TemplateSample[]> {
+  return request(settings, `/templates/${templateId}/samples?limit=${encodeURIComponent(String(limit))}`)
+}
+
+export function listTemplateVersions(settings: AppSettings, templateId: string): Promise<TemplateVersion[]> {
+  return request(settings, `/templates/${templateId}/versions`)
+}
+
+export function restoreTemplateVersion(
+  settings: AppSettings,
+  templateId: string,
+  versionId: string,
+): Promise<PromptTemplate> {
+  return request(settings, `/templates/${templateId}/versions/${versionId}/restore`, { method: 'POST' })
+}
+
+export function listSimilarTemplates(
+  settings: AppSettings,
+  payload: { templateId?: string; assetId?: string; query?: string; limit?: number },
+): Promise<PromptTemplate[]> {
+  const params = new URLSearchParams()
+  if (payload.templateId) params.set('templateId', payload.templateId)
+  if (payload.assetId) params.set('assetId', payload.assetId)
+  if (payload.query) params.set('query', payload.query)
+  params.set('limit', String(payload.limit ?? 8))
+  return request(settings, `/templates/similar?${params.toString()}`)
+}
+
+export function importTemplatePack(
+  settings: AppSettings,
+  templates: Array<Record<string, unknown>>,
+): Promise<{ ok: boolean; created: number; skipped: number }> {
+  return request(settings, '/templates/import-pack', {
+    method: 'POST',
+    body: JSON.stringify({ templates }),
+  })
+}
+
+export function submitTemplate(settings: AppSettings, templateId: string): Promise<PromptTemplate> {
+  return request(settings, `/templates/${templateId}/submit`, { method: 'POST' })
+}
+
+export function approveTemplateSubmission(settings: AppSettings, templateId: string): Promise<PromptTemplate> {
+  return request(settings, `/admin/template-submissions/${templateId}/approve`, { method: 'POST' })
+}
+
+export function rejectTemplateSubmission(
+  settings: AppSettings,
+  templateId: string,
+  reason = '',
+): Promise<PromptTemplate> {
+  return request(settings, `/admin/template-submissions/${templateId}/reject`, {
+    method: 'POST',
+    body: JSON.stringify({ reason }),
+  })
+}
+
+export function importOpenPromptLibraryTemplates(
+  settings: AppSettings,
+  source: OpenPromptLibrarySourceId,
+  limit = 0,
+  selectedKeys: string[] = [],
+): Promise<{ ok: boolean; source: string; created: number; updated: number; skipped: number }> {
+  return request(settings, `/admin/templates/import-open-library?source=${encodeURIComponent(source)}&limit=${encodeURIComponent(String(limit))}`, {
+    method: 'POST',
+    body: JSON.stringify({ source, limit, selectedKeys }),
+  })
+}
+
+export function importEvolinkTemplates(
+  settings: AppSettings,
+  limit = 0,
+): Promise<{ ok: boolean; source: string; created: number; updated: number; skipped: number }> {
+  return importOpenPromptLibraryTemplates(settings, 'evolink', limit)
+}
+
 export function listGenerations(settings: AppSettings): Promise<TaskRecord[]> {
   return request(settings, '/generations')
+}
+
+export function getGenerationQueueStats(settings: AppSettings): Promise<GenerationQueueStats> {
+  return request(settings, '/generations/queue-stats')
+}
+
+export function getGenerationPreflight(
+  settings: AppSettings,
+  payload: {
+    channelId: string
+    model: string
+    prompt: string
+    params: TaskRecord['params']
+    inputImageCount: number
+    hasMask: boolean
+  },
+): Promise<GenerationPreflight> {
+  return request(settings, '/generations/preflight', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
 }
 
 export function getGeneration(settings: AppSettings, taskId: string): Promise<TaskRecord> {
@@ -117,8 +439,12 @@ export function deleteGeneration(settings: AppSettings, taskId: string): Promise
   return request(settings, `/generations/${taskId}`, { method: 'DELETE' })
 }
 
+export function cancelGeneration(settings: AppSettings, taskId: string): Promise<TaskRecord> {
+  return request(settings, `/generations/${taskId}/cancel`, { method: 'POST' })
+}
+
 export async function getAssetDataUrl(settings: AppSettings, assetId: string): Promise<string> {
-  const response = await fetch(`${apiBase(settings)}/assets/${assetId}`, {
+  const response = await fetch(`${apiBase()}/assets/${assetId}`, {
     credentials: 'include',
   })
   if (!response.ok) throw new Error(await readError(response))
@@ -131,11 +457,33 @@ export async function getAssetDataUrl(settings: AppSettings, assetId: string): P
   return `data:${blob.type || 'image/png'};base64,${btoa(binary)}`
 }
 
+export function copyAssetToSystemClipboard(
+  settings: AppSettings,
+  assetId: string,
+): Promise<{ ok: boolean; method: string }> {
+  return request(settings, `/assets/${assetId}/copy-to-clipboard`, { method: 'POST' })
+}
+
+export function optimizePrompt(
+  settings: AppSettings,
+  payload: { prompt: string; negativePrompt?: string | null; channelId?: string | null; model?: string | null },
+): Promise<PromptOptimizeResult> {
+  return request(settings, '/prompts/optimize', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
 export interface BackendGenerateRequest {
   taskId?: string
   templateId?: string
   templateVersionId?: string
-  settings: AppSettings
+  projectId?: string | null
+  parentTaskId?: string | null
+  experimentId?: string | null
+  variationLabel?: string | null
+  channelId: string
+  model: string
   prompt: string
   params: TaskRecord['params']
   inputImageDataUrls: string[]

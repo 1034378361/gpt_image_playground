@@ -1,0 +1,38 @@
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: deploy/Dockerfile.backend
+    container_name: gip-backend
+    restart: unless-stopped
+    environment:
+      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-https://api.openai.com/v1}
+      GIP_REQUEST_TIMEOUT_SECONDS: ${GIP_REQUEST_TIMEOUT_SECONDS:-300}
+      GIP_GENERATION_WORKER_COUNT: ${GIP_GENERATION_WORKER_COUNT:-4}
+      GIP_SESSION_SECURE: ${GIP_SESSION_SECURE:-false}
+      GIP_SESSION_TTL_SECONDS: ${GIP_SESSION_TTL_SECONDS:-604800}
+      GIP_MAX_UPLOAD_BYTES: ${GIP_MAX_UPLOAD_BYTES:-26214400}
+      GIP_THUMBNAIL_MAX_SIZE: ${GIP_THUMBNAIL_MAX_SIZE:-512}
+      GIP_DATA_DIR: /app/backend/data
+      GIP_DATABASE_PATH: /app/backend/data/app.sqlite3
+      GIP_ASSET_DIR: /app/backend/data/assets
+      GIP_RESTORE_POINT_DIR: /app/backend/data/restore-points
+      GIP_RESTORE_POINT_RETENTION: ${GIP_RESTORE_POINT_RETENTION:-10}
+      GIP_CORS_ORIGINS: ${GIP_CORS_ORIGINS:-http://localhost:8080}
+    volumes:
+      - ./backend/data:/app/backend/data
+    expose:
+      - "8000"
+
+  frontend:
+    build:
+      context: .
+      dockerfile: deploy/Dockerfile.frontend
+    container_name: gip-frontend
+    restart: unless-stopped
+    depends_on:
+      - backend
+    environment:
+      GIP_BACKEND_UPSTREAM: ${GIP_BACKEND_UPSTREAM:-http://backend:8000}
+    ports:
+      - "${GIP_HTTP_PORT:-8080}:80"

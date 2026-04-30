@@ -3,31 +3,63 @@ import { DEFAULT_PARAMS } from '../types'
 import type { PromptTemplate } from '../types'
 import {
   ALL_TEMPLATE_CATEGORIES,
+  ALL_TEMPLATE_COLLECTIONS,
+  composeTemplatePrompt,
   duplicateTemplateRecord,
+  extractTemplateVariableDefinitions,
+  extractTemplateVariables,
   filterTemplates,
   getTemplateCategories,
+  getTemplateCollectionCounts,
   getTemplateTags,
   normalizeTemplateDraft,
   normalizeTemplateTags,
-  extractTemplateVariables,
-  composeTemplatePrompt,
 } from './templateUtils'
 
 function template(overrides: Partial<PromptTemplate> = {}): PromptTemplate {
   return {
     id: 'template-a',
     userId: null,
+    projectId: null,
     title: 'Product hero',
     description: 'White background product render',
     prompt: 'A clean product photo',
+    negativePrompt: undefined,
     tags: ['product', 'white'],
     category: 'commerce',
     params: { ...DEFAULT_PARAMS },
+    channelId: null,
     apiMode: 'images',
     model: 'gpt-image-2',
     coverImageId: null,
+    externalCoverUrl: null,
+    exampleImages: [],
+    recommendedChannelId: null,
+    recommendedApiMode: null,
+    recommendedModel: '',
     linkedTaskIds: [],
     isFavorite: false,
+    sourceName: '',
+    sourceUrl: '',
+    sourceAuthor: '',
+    licenseName: '',
+    formFields: [],
+    collections: [],
+    isFeatured: false,
+    visibility: 'private',
+    submissionStatus: 'draft',
+    submittedAt: null,
+    reviewedAt: null,
+    reviewedBy: null,
+    rejectionReason: null,
+    favoriteCount: 0,
+    usageCount: 0,
+    successCount: 0,
+    failureCount: 0,
+    ratingCount: 0,
+    averageRating: 0,
+    lastUsedAt: null,
+    qualityScore: 0,
     version: 1,
     createdAt: 1,
     updatedAt: 1,
@@ -54,6 +86,7 @@ describe('template utilities', () => {
       params: { ...DEFAULT_PARAMS },
       apiMode: 'responses',
       model: ' gpt-5.5 ',
+      projectId: '__unassigned__',
       coverImageId: '',
       linkedTaskIds: ['task-a', 'task-a'],
     })
@@ -63,6 +96,7 @@ describe('template utilities', () => {
     expect(draft.tags).toEqual(['portrait'])
     expect(draft.category).toBe('people')
     expect(draft.model).toBe('gpt-5.5')
+    expect(draft.projectId).toBeNull()
     expect(draft.coverImageId).toBeNull()
     expect(draft.linkedTaskIds).toEqual(['task-a'])
   })
@@ -78,6 +112,9 @@ describe('template utilities', () => {
       category: ALL_TEMPLATE_CATEGORIES,
       tag: '__all__',
       favoriteOnly: false,
+      scope: 'all',
+      sort: 'updated',
+      collection: ALL_TEMPLATE_COLLECTIONS,
     }).map((item) => item.id)).toEqual(['b'])
 
     expect(filterTemplates(templates, {
@@ -85,6 +122,9 @@ describe('template utilities', () => {
       category: 'commerce',
       tag: 'product',
       favoriteOnly: true,
+      scope: 'all',
+      sort: 'updated',
+      collection: ALL_TEMPLATE_COLLECTIONS,
     }).map((item) => item.id)).toEqual(['a'])
   })
 
@@ -124,5 +164,79 @@ describe('template utilities', () => {
     expect(composeTemplatePrompt(t, { product_name: 'watch', background: 'marble' })).toBe(
       'A watch on marble\n\nNegative prompt: no marble, no blur',
     )
+  })
+
+  it('extracts and fills Rova-style argument variables with defaults', () => {
+    const t = template({
+      prompt: 'A bottle labeled {argument name="brand label" default="N°5"} on {{surface}}',
+    })
+
+    expect(extractTemplateVariables(t.prompt)).toEqual(['surface', 'brand label'])
+    expect(composeTemplatePrompt(t, { surface: 'black marble' })).toBe('A bottle labeled N°5 on black marble')
+    expect(composeTemplatePrompt(t, { 'brand label': 'ACME', surface: 'glass' })).toBe('A bottle labeled ACME on glass')
+  })
+
+  it('extracts bracket placeholders and expands semantic query terms', () => {
+    const t = template({
+      prompt: 'A premium [LOGO_NAME] door handle with [background]',
+      tags: ['product'],
+      category: 'commerce',
+    })
+
+    expect(extractTemplateVariables(t.prompt)).toEqual(['LOGO_NAME', 'background'])
+    expect(composeTemplatePrompt(t, { LOGO_NAME: 'Acme', background: 'walnut door' })).toBe(
+      'A premium Acme door handle with walnut door',
+    )
+    expect(filterTemplates([t], {
+      query: '商品',
+      category: ALL_TEMPLATE_CATEGORIES,
+      tag: '__all__',
+      favoriteOnly: false,
+      scope: 'all',
+      sort: 'quality',
+      collection: ALL_TEMPLATE_COLLECTIONS,
+    }).map((item) => item.id)).toEqual(['template-a'])
+  })
+
+  it('extracts typed argument variable definitions', () => {
+    const variables = extractTemplateVariableDefinitions(
+      'A {argument name="palette" type="select" options="red|blue" required="false" description="主色" example="red"} background',
+    )
+
+    expect(variables[0]).toMatchObject({
+      name: 'palette',
+      type: 'select',
+      options: ['red', 'blue'],
+      required: false,
+      description: '主色',
+      example: 'red',
+    })
+  })
+
+  it('filters by semantic collections and expanded search terms', () => {
+    const templates = [
+      template({ id: 'a', title: 'Clean packshot', prompt: 'studio product bottle render', tags: ['product'], category: 'commerce' }),
+      template({ id: 'b', title: 'Wordmark study', description: 'identity system', prompt: 'typography logo exploration', tags: ['brand'], category: 'identity' }),
+    ]
+
+    expect(getTemplateCollectionCounts(templates).map((item) => item.id)).toContain('product-hero')
+    expect(filterTemplates(templates, {
+      query: '字标',
+      category: ALL_TEMPLATE_CATEGORIES,
+      tag: '__all__',
+      favoriteOnly: false,
+      scope: 'all',
+      sort: 'quality',
+      collection: ALL_TEMPLATE_COLLECTIONS,
+    }).map((item) => item.id)).toEqual(['b'])
+    expect(filterTemplates(templates, {
+      query: '',
+      category: ALL_TEMPLATE_CATEGORIES,
+      tag: '__all__',
+      favoriteOnly: false,
+      scope: 'all',
+      sort: 'quality',
+      collection: 'product-hero',
+    }).map((item) => item.id)).toEqual(['a'])
   })
 })

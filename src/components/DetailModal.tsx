@@ -1,10 +1,12 @@
 import { useEffect, useState, useMemo, useRef } from 'react'
 import { useStore, getCachedImage, ensureImageCached, reuseConfig, editOutputs, removeTask, updateTaskInStore, showCodexCliPrompt, getCodexCliPromptKey, setTemplateCover } from '../store'
+import { cancelTask } from '../storeBackend'
 import { useCloseOnEscape } from '../hooks/useCloseOnEscape'
 import { formatImageRatio } from '../lib/size'
 import { ActualValueBadge, DetailParamValue } from '../lib/paramDisplay'
 import { copyBlobToClipboard, copyTextToClipboard, getClipboardFailureMessage } from '../lib/clipboard'
 import { createMaskPreviewDataUrl } from '../lib/canvasImage'
+import { getPrimaryDiagnostic, getTaskFailureSummary } from '../lib/taskDiagnostics'
 
 export default function DetailModal() {
   const tasks = useStore((s) => s.tasks)
@@ -17,6 +19,7 @@ export default function DetailModal() {
   const settings = useStore((s) => s.settings)
   const dismissedCodexCliPrompts = useStore((s) => s.dismissedCodexCliPrompts)
   const templates = useStore((s) => s.templates)
+  const projects = useStore((s) => s.projects)
   const setSelectedTemplateId = useStore((s) => s.setSelectedTemplateId)
   const setCurrentView = useStore((s) => s.setCurrentView)
   const setTemplateEditor = useStore((s) => s.setTemplateEditor)
@@ -44,7 +47,7 @@ export default function DetailModal() {
   }, [detailTaskId])
 
   useEffect(() => {
-    if (task?.status !== 'running') return
+    if (task?.status !== 'queued' && task?.status !== 'running') return
     const id = window.setInterval(() => setNow(Date.now()), 1000)
     return () => window.clearInterval(id)
   }, [task?.status])
@@ -158,6 +161,7 @@ export default function DetailModal() {
   if (!task) return null
 
   const outputLen = task.outputImages?.length || 0
+  const isActiveTask = task.status === 'queued' || task.status === 'running'
   const currentImageRatio = currentOutputImageId ? imageRatios[currentOutputImageId] : ''
   const currentImageSize = currentOutputImageId ? imageSizes[currentOutputImageId] : ''
   const currentActualParams = currentOutputImageId ? task.actualParamsByImage?.[currentOutputImageId] : undefined
@@ -170,6 +174,13 @@ export default function DetailModal() {
   const sourceTemplate = task.templateId
     ? templates.find((template) => template.id === task.templateId) ?? null
     : null
+  const currentProject = task.projectId ? projects.find((project) => project.id === task.projectId) ?? null : null
+  const parentTask = task.parentTaskId ? tasks.find((item) => item.id === task.parentTaskId) ?? null : null
+  const childTasks = tasks.filter((item) => item.parentTaskId === task.id).slice(0, 6)
+  const experimentSiblings = task.experimentId
+    ? tasks.filter((item) => item.experimentId === task.experimentId && item.id !== task.id).slice(0, 8)
+    : []
+  const primaryDiagnostic = getPrimaryDiagnostic(task)
 
   const formatTime = (ts: number | null) => {
     if (!ts) return ''
@@ -177,7 +188,7 @@ export default function DetailModal() {
   }
 
   const formatDuration = () => {
-    if (task.status === 'running') {
+    if (isActiveTask) {
       const seconds = Math.max(0, Math.floor((now - task.createdAt) / 1000))
       const mm = String(Math.floor(seconds / 60)).padStart(2, '0')
       const ss = String(seconds % 60).padStart(2, '0')
@@ -234,6 +245,10 @@ export default function DetailModal() {
 
   const handleToggleFavorite = () => {
     updateTaskInStore(task.id, { isFavorite: !task.isFavorite })
+  }
+
+  const handleCancel = () => {
+    cancelTask(task)
   }
 
   const handleCopyError = async () => {
@@ -377,6 +392,22 @@ export default function DetailModal() {
               )}
             </>
           )}
+          {task.status === 'queued' && (
+            <>
+              <div className="absolute left-4 top-4 flex items-center gap-1 bg-black/50 text-white text-xs px-2 py-0.5 rounded backdrop-blur-sm font-mono">
+                <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                </svg>
+                {formatDuration()}
+              </div>
+              <div className="flex flex-col items-center gap-2 text-amber-500">
+                <svg className="w-10 h-10" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                </svg>
+                <span className="text-sm text-gray-500 dark:text-gray-400">排队中</span>
+              </div>
+            </>
+          )}
           {task.status === 'running' && (
             <>
               <div className="absolute left-4 top-4 flex items-center gap-1 bg-black/50 text-white text-xs px-2 py-0.5 rounded backdrop-blur-sm font-mono">
@@ -396,15 +427,16 @@ export default function DetailModal() {
               <svg className="w-10 h-10 text-red-400 mx-auto mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
               </svg>
+              <p className="mb-2 text-sm font-medium text-red-500">{getTaskFailureSummary(task)}</p>
               <p
-                className="overflow-hidden text-sm leading-6 text-red-500 break-all"
+                className="overflow-hidden text-sm leading-6 text-red-400 break-all"
                 style={{
                   display: '-webkit-box',
                   WebkitBoxOrient: 'vertical',
                   WebkitLineClamp: 4,
                 }}
               >
-                {task.error || '生成失败'}
+                {primaryDiagnostic?.detail || task.error || '生成失败'}
               </p>
               <button
                 type="button"
@@ -418,6 +450,14 @@ export default function DetailModal() {
                   <path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2" />
                 </svg>
               </button>
+            </div>
+          )}
+          {task.status === 'canceled' && (
+            <div className="w-full max-w-md px-4 text-center">
+              <svg className="w-10 h-10 text-gray-400 mx-auto mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18 18 6M6 6l12 12" />
+              </svg>
+              <p className="text-sm leading-6 text-gray-500 dark:text-gray-400">任务已取消</p>
             </div>
           )}
         </div>
@@ -495,6 +535,81 @@ export default function DetailModal() {
                       设为封面
                     </button>
                   )}
+                </div>
+              </div>
+            )}
+
+            {(currentProject || parentTask || childTasks.length > 0 || experimentSiblings.length > 0) && (
+              <div className="mb-4 rounded-xl border border-violet-200/70 bg-violet-50/70 px-3 py-3 dark:border-violet-400/20 dark:bg-violet-500/10">
+                <h3 className="mb-2 text-xs font-medium uppercase tracking-wider text-violet-700 dark:text-violet-300">分支与项目</h3>
+                <div className="space-y-2 text-xs text-violet-700 dark:text-violet-200">
+                  {currentProject && (
+                    <div className="flex items-center gap-2">
+                      <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: currentProject.color }} />
+                      <span>项目：{currentProject.name}</span>
+                    </div>
+                  )}
+                  {parentTask && (
+                    <button
+                      type="button"
+                      onClick={() => setDetailTaskId(parentTask.id)}
+                      className="block truncate text-left hover:underline"
+                      title={parentTask.prompt}
+                    >
+                      上游分支：{parentTask.prompt}
+                    </button>
+                  )}
+                  {childTasks.length > 0 && (
+                    <div>
+                      <div className="mb-1 text-violet-500 dark:text-violet-300">下游分支</div>
+                      <div className="space-y-1">
+                        {childTasks.map((item) => (
+                          <button
+                            key={item.id}
+                            type="button"
+                            onClick={() => setDetailTaskId(item.id)}
+                            className="block truncate text-left hover:underline"
+                            title={item.prompt}
+                          >
+                            {item.variationLabel ? `${item.variationLabel} · ` : ''}{item.prompt}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  {experimentSiblings.length > 0 && (
+                    <div>
+                      <div className="mb-1 text-violet-500 dark:text-violet-300">同组实验</div>
+                      <div className="space-y-1">
+                        {experimentSiblings.map((item) => (
+                          <button
+                            key={item.id}
+                            type="button"
+                            onClick={() => setDetailTaskId(item.id)}
+                            className="block truncate text-left hover:underline"
+                            title={item.prompt}
+                          >
+                            {item.variationLabel || item.model || item.id}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {task.diagnostics && task.diagnostics.length > 0 && (
+              <div className="mb-4 rounded-xl border border-amber-200/70 bg-amber-50/80 px-3 py-3 dark:border-amber-400/20 dark:bg-amber-500/10">
+                <h3 className="mb-2 text-xs font-medium uppercase tracking-wider text-amber-700 dark:text-amber-200">失败诊断</h3>
+                <div className="space-y-2">
+                  {task.diagnostics.map((item) => (
+                    <div key={`${item.code}-${item.title}`} className="rounded-lg bg-white/70 px-3 py-2 text-xs dark:bg-white/[0.04]">
+                      <div className="font-medium text-gray-700 dark:text-gray-100">{item.title}</div>
+                      <div className="mt-1 text-gray-500 dark:text-gray-400">{item.detail}</div>
+                      {item.hint && <div className="mt-1 text-amber-700 dark:text-amber-200">建议：{item.hint}</div>}
+                    </div>
+                  ))}
                 </div>
               </div>
             )}
@@ -594,6 +709,17 @@ export default function DetailModal() {
 
           {/* 操作按钮 */}
           <div className="grid grid-cols-4 sm:flex gap-2 pt-4 border-t border-gray-100 dark:border-white/[0.08]">
+            {isActiveTask && (
+              <button
+                onClick={handleCancel}
+                className="col-span-2 sm:flex-1 flex items-center justify-center gap-1.5 px-3 py-2 rounded-xl bg-amber-50 dark:bg-amber-500/10 text-amber-600 dark:text-amber-400 hover:bg-amber-100 dark:hover:bg-amber-500/20 transition text-sm font-medium whitespace-nowrap"
+              >
+                <svg className="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18 18 6M6 6l12 12" />
+                </svg>
+                取消任务
+              </button>
+            )}
             <button
               onClick={handleReuse}
               className="col-span-2 sm:flex-1 flex items-center justify-center gap-1.5 px-3 py-2 rounded-xl bg-blue-50 dark:bg-blue-500/10 text-blue-600 dark:text-blue-400 hover:bg-blue-100 dark:hover:bg-blue-500/20 transition text-sm font-medium whitespace-nowrap"

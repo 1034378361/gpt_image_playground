@@ -1,10 +1,14 @@
 import { useRef, useEffect, useCallback, useState, useMemo } from 'react'
-import { useStore, submitTask, addImageFromFile, updateTaskInStore, removeMultipleTasks } from '../store'
+import { useStore, addImageFromFile, updateTaskInStore, removeMultipleTasks, selectChannelModel, optimizeCurrentPrompt } from '../store'
+import { refreshGenerationPreflight, submitTask } from '../storeBackend'
 import { DEFAULT_PARAMS } from '../types'
 import { normalizeImageSize } from '../lib/size'
 import { createMaskPreviewDataUrl } from '../lib/canvasImage'
+import { compatibilityStatusLabel, healthStatusLabel } from '../lib/channelHealth'
+import { canManageSystem } from '../lib/roles'
 import Select from './Select'
 import SizePickerModal from './SizePickerModal'
+import ExperimentLabModal from './ExperimentLabModal'
 
 /** 通用悬浮气泡提示 */
 function ButtonTooltip({ visible, text }: { visible: boolean; text: string }) {
@@ -35,12 +39,20 @@ function useIsMobile() {
 export default function InputBar() {
   const prompt = useStore((s) => s.prompt)
   const setPrompt = useStore((s) => s.setPrompt)
+  const composerClearMode = useStore((s) => s.composerClearMode)
+  const setComposerClearMode = useStore((s) => s.setComposerClearMode)
   const inputImages = useStore((s) => s.inputImages)
   const removeInputImage = useStore((s) => s.removeInputImage)
   const clearInputImages = useStore((s) => s.clearInputImages)
   const params = useStore((s) => s.params)
   const setParams = useStore((s) => s.setParams)
   const settings = useStore((s) => s.settings)
+  const backendUser = useStore((s) => s.backendUser)
+  const channels = useStore((s) => s.channels)
+  const projects = useStore((s) => s.projects)
+  const currentProjectId = useStore((s) => s.currentProjectId)
+  const pendingParentTaskId = useStore((s) => s.pendingParentTaskId)
+  const generationPreflight = useStore((s) => s.generationPreflight)
   const setShowSettings = useStore((s) => s.setShowSettings)
   const setLightboxImageId = useStore((s) => s.setLightboxImageId)
   const setConfirmDialog = useStore((s) => s.setConfirmDialog)
@@ -59,6 +71,14 @@ export default function InputBar() {
   const setCurrentView = useStore((s) => s.setCurrentView)
   const showToast = useStore((s) => s.showToast)
   const activeTemplate = templates.find((template) => template.id === activeTemplateId) ?? null
+  const currentProject = currentProjectId && currentProjectId !== '__unassigned__'
+    ? projects.find((project) => project.id === currentProjectId) ?? null
+    : null
+  const pendingParentTask = pendingParentTaskId
+    ? tasks.find((task) => task.id === pendingParentTaskId) ?? null
+    : null
+  const currentChannel = channels.find((channel) => channel.id === settings.channelId) ?? null
+  const enabledModels = currentChannel?.models.filter((model) => model.enabled) ?? []
 
   const filteredTasks = useMemo(() => {
     const sorted = [...tasks].sort((a, b) => b.createdAt - a.createdAt)
@@ -120,6 +140,7 @@ export default function InputBar() {
     }
     setTemplateEditor({ mode: 'fromCurrent' })
   }, [prompt, setTemplateEditor, showToast])
+
   const maskDraft = useStore((s) => s.maskDraft)
   const clearMaskDraft = useStore((s) => s.clearMaskDraft)
   const setMaskEditorImageId = useStore((s) => s.setMaskEditorImageId)
@@ -136,8 +157,10 @@ export default function InputBar() {
   const [compressionHintVisible, setCompressionHintVisible] = useState(false)
   const [moderationHintVisible, setModerationHintVisible] = useState(false)
   const [qualityHintVisible, setQualityHintVisible] = useState(false)
+  const [optimizingPrompt, setOptimizingPrompt] = useState(false)
   const [mobileCollapsed, setMobileCollapsed] = useState(false)
   const [showSizePicker, setShowSizePicker] = useState(false)
+  const [showExperimentLab, setShowExperimentLab] = useState(false)
   const [maskPreviewUrl, setMaskPreviewUrl] = useState('')
   const handleRef = useRef<HTMLDivElement>(null)
   const dragTouchRef = useRef({ startY: 0, moved: false })
@@ -151,7 +174,14 @@ export default function InputBar() {
   const dragCounter = useRef(0)
   const isMobile = useIsMobile()
 
-  const canSubmit = Boolean(prompt.trim()) && (settings.generationMode === 'server' || Boolean(settings.apiKey))
+  const handleOptimizePrompt = useCallback(() => {
+    setOptimizingPrompt(true)
+    void optimizeCurrentPrompt().finally(() => setOptimizingPrompt(false))
+  }, [])
+
+  const hasGenerationConfig = Boolean(backendUser && settings.channelId && settings.model)
+  const missingChannelMessage = canManageSystem(backendUser) ? '请先配置并选择渠道/模型' : '当前没有可用渠道，请联系管理员'
+  const canSubmit = Boolean(prompt.trim()) && hasGenerationConfig
   const atImageLimit = inputImages.length >= API_MAX_IMAGES
   const maskTargetImage = maskDraft
     ? inputImages.find((img) => img.id === maskDraft.targetImageId) ?? null
@@ -159,6 +189,14 @@ export default function InputBar() {
   const referenceImages = maskTargetImage
     ? inputImages.filter((img) => img.id !== maskTargetImage.id)
     : inputImages
+
+  const handleMissingGenerationConfig = useCallback(() => {
+    if (canManageSystem(backendUser)) {
+      setShowSettings(true)
+    } else {
+      showToast(missingChannelMessage, 'error')
+    }
+  }, [backendUser, missingChannelMessage, setShowSettings, showToast])
 
   useEffect(() => {
     setOutputCompressionInput(
@@ -181,6 +219,20 @@ export default function InputBar() {
       setParams({ quality: 'auto' })
     }
   }, [params.quality, settings.codexCli, setParams])
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      void refreshGenerationPreflight()
+    }, 260)
+    return () => window.clearTimeout(timer)
+  }, [
+    inputImages.length,
+    maskDraft?.targetImageId,
+    params,
+    prompt,
+    settings.channelId,
+    settings.model,
+  ])
 
   useEffect(() => () => {
     if (compressionHintTimerRef.current != null) {
@@ -592,6 +644,45 @@ export default function InputBar() {
   const renderParams = (cols: string) => (
     <div className={`grid ${cols} gap-2 text-xs flex-1`}>
       <label className="flex flex-col gap-0.5">
+        <span className="text-gray-400 dark:text-gray-500 ml-1">渠道</span>
+        <Select
+          value={settings.channelId || '__none__'}
+          onChange={(value) => {
+            if (value === '__none__') {
+              handleMissingGenerationConfig()
+              return
+            }
+            selectChannelModel(String(value))
+          }}
+          options={
+            channels.length
+              ? channels.map((channel) => ({
+                  label: `${channel.name} · ${healthStatusLabel(channel.healthStatus)} · ${compatibilityStatusLabel(channel.compatibilityStatus)}`,
+                  value: channel.id,
+                }))
+              : [{ label: missingChannelMessage, value: '__none__' }]
+          }
+          className={selectClass}
+        />
+      </label>
+      <label className="flex flex-col gap-0.5">
+        <span className="text-gray-400 dark:text-gray-500 ml-1">模型</span>
+        <Select
+          value={settings.model || '__none__'}
+          onChange={(value) => {
+            if (!settings.channelId || value === '__none__') return
+            selectChannelModel(settings.channelId, String(value))
+          }}
+          options={
+            enabledModels.length
+              ? enabledModels.map((model) => ({ label: model.label || model.id, value: model.id }))
+              : [{ label: currentChannel ? '当前渠道暂无可用模型' : '请先选择渠道', value: '__none__' }]
+          }
+          className={selectClass}
+          disabled={!currentChannel || !enabledModels.length}
+        />
+      </label>
+      <label className="flex flex-col gap-0.5">
         <span className="text-gray-400 dark:text-gray-500 ml-1">尺寸</span>
         <button
           type="button"
@@ -763,6 +854,7 @@ export default function InputBar() {
           onClose={() => setShowSizePicker(false)}
         />
       )}
+      <ExperimentLabModal open={showExperimentLab} onClose={() => setShowExperimentLab(false)} />
 
       <div data-input-bar className="fixed bottom-4 sm:bottom-6 left-1/2 -translate-x-1/2 z-30 w-full max-w-4xl px-3 sm:px-4 transition-all duration-300">
         {selectedTaskIds.length > 0 && (
@@ -879,6 +971,74 @@ export default function InputBar() {
             </div>
           )}
 
+          {(currentProject || currentProjectId === '__unassigned__' || pendingParentTask) && (
+            <div className="mb-2 flex flex-wrap items-center gap-2 text-xs">
+              {(currentProject || currentProjectId === '__unassigned__') && (
+                <span className="inline-flex items-center gap-2 rounded-xl border border-violet-200/70 bg-violet-50/80 px-3 py-2 text-violet-700 dark:border-violet-400/20 dark:bg-violet-500/10 dark:text-violet-300">
+                  <span className="h-2 w-2 rounded-full" style={{ backgroundColor: currentProject?.color || '#94a3b8' }} />
+                  项目：{currentProject?.name || '未归类'}
+                </span>
+              )}
+              {pendingParentTask && (
+                <span className="inline-flex max-w-full items-center gap-2 rounded-xl border border-emerald-200/70 bg-emerald-50/80 px-3 py-2 text-emerald-700 dark:border-emerald-400/20 dark:bg-emerald-500/10 dark:text-emerald-300">
+                  Remix 来源：<span className="truncate">{pendingParentTask.prompt}</span>
+                </span>
+              )}
+            </div>
+          )}
+
+          {generationPreflight && (
+            <div className={`mb-2 rounded-xl border px-3 py-2 text-xs ${
+              generationPreflight.ok
+                ? 'border-gray-200/70 bg-white/60 text-gray-600 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-300'
+                : 'border-amber-200/70 bg-amber-50/80 text-amber-700 dark:border-amber-400/20 dark:bg-amber-500/10 dark:text-amber-200'
+            }`}>
+              <div className="flex flex-wrap items-center gap-2">
+                <span>预检</span>
+                <span className="rounded-full bg-black/5 px-2 py-0.5 dark:bg-white/[0.06]">
+                  {generationPreflight.predictedApiMode}
+                </span>
+                <span className="rounded-full bg-black/5 px-2 py-0.5 dark:bg-white/[0.06]">
+                  {generationPreflight.codexCli ? 'Codex CLI' : '标准 OpenAI'}
+                </span>
+                {generationPreflight.diagnostics.length > 0 && (
+                  <span className="text-gray-400 dark:text-gray-500">
+                    {generationPreflight.diagnostics[0].title}
+                  </span>
+                )}
+              </div>
+              {generationPreflight.diagnostics.length > 0 && (
+                <div className="mt-2 flex flex-wrap gap-1.5">
+                  {generationPreflight.diagnostics.slice(0, 3).map((item) => (
+                    <span
+                      key={`${item.code}-${item.title}`}
+                      className={`rounded-full px-2 py-0.5 ${
+                        item.level === 'error'
+                          ? 'bg-rose-100 text-rose-600 dark:bg-rose-500/15 dark:text-rose-300'
+                          : item.level === 'warning'
+                          ? 'bg-amber-100 text-amber-700 dark:bg-amber-500/15 dark:text-amber-200'
+                          : 'bg-slate-100 text-slate-600 dark:bg-white/[0.06] dark:text-slate-300'
+                      }`}
+                    >
+                      {item.title}
+                    </span>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
+          {prompt.trim() && (
+            <details className="mb-2 rounded-xl border border-gray-200/70 bg-white/50 px-3 py-2 text-xs text-gray-500 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-400">
+              <summary className="cursor-pointer select-none font-medium text-gray-600 dark:text-gray-300">
+                最终提示词预览 · {prompt.trim().length} 字
+              </summary>
+              <p className="mt-2 max-h-28 overflow-y-auto whitespace-pre-wrap break-words leading-5">
+                {prompt.trim()}
+              </p>
+            </details>
+          )}
+
           {/* 输入框 */}
           <textarea
             ref={textareaRef}
@@ -894,7 +1054,7 @@ export default function InputBar() {
           <div className="mt-3">
             {/* 桌面端布局 */}
             <div className="hidden sm:flex items-end justify-between gap-3">
-              {renderParams('grid-cols-6')}
+              {renderParams('grid-cols-8')}
 
               <div className="flex gap-2 flex-shrink-0 mb-0.5">
                 <div
@@ -926,21 +1086,37 @@ export default function InputBar() {
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v16l-7-4-7 4z" />
                   </svg>
                 </button>
+                <button
+                  onClick={handleOptimizePrompt}
+                  disabled={optimizingPrompt || !prompt.trim()}
+                  className="p-2.5 rounded-xl bg-gray-200 dark:bg-white/[0.06] hover:bg-gray-300 dark:hover:bg-white/[0.1] text-gray-500 dark:text-gray-300 transition-all shadow-sm hover:shadow disabled:opacity-40 disabled:cursor-not-allowed"
+                  title="优化提示词"
+                >
+                  <svg className={`w-5 h-5 ${optimizingPrompt ? 'animate-spin' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 3 4 14h7l-1 7 9-11h-7l1-7z" />
+                  </svg>
+                </button>
+                <button
+                  onClick={() => setShowExperimentLab(true)}
+                  disabled={!prompt.trim()}
+                  className="p-2.5 rounded-xl bg-gray-200 dark:bg-white/[0.06] hover:bg-gray-300 dark:hover:bg-white/[0.1] text-gray-500 dark:text-gray-300 transition-all shadow-sm hover:shadow disabled:opacity-40 disabled:cursor-not-allowed"
+                  title="A/B 对比实验"
+                >
+                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 7h16M7 12h10M10 17h4" />
+                  </svg>
+                </button>
                 <div
                   className="relative"
                   onMouseEnter={() => setSubmitHover(true)}
                   onMouseLeave={() => setSubmitHover(false)}
                 >
-                  <ButtonTooltip visible={settings.generationMode === 'direct' && !settings.apiKey && submitHover} text="尚未完成 API 配置，请在右上角设置中进行" />
+              <ButtonTooltip visible={!hasGenerationConfig && submitHover} text={missingChannelMessage} />
                   <button
-                    onClick={() => (settings.generationMode === 'server' || settings.apiKey) ? submitTask() : setShowSettings(true)}
-                    disabled={(settings.generationMode === 'server' || settings.apiKey) ? !canSubmit : false}
-                    className={`p-2.5 rounded-xl transition-all shadow-sm hover:shadow ${
-                      settings.generationMode === 'direct' && !settings.apiKey
-                        ? 'bg-gray-300 dark:bg-white/[0.06] text-white cursor-pointer'
-                        : 'bg-blue-500 text-white hover:bg-blue-600 disabled:bg-gray-300 dark:disabled:bg-white/[0.04] disabled:opacity-50 disabled:cursor-not-allowed'
-                    }`}
-                    title={(settings.generationMode === 'server' || settings.apiKey) ? (maskDraft ? '遮罩编辑 (Ctrl+Enter)' : '生成 (Ctrl+Enter)') : '请先配置 API'}
+                    onClick={() => hasGenerationConfig ? submitTask() : handleMissingGenerationConfig()}
+                    disabled={hasGenerationConfig ? !canSubmit : false}
+                    className="p-2.5 rounded-xl bg-blue-500 text-white transition-all shadow-sm hover:bg-blue-600 hover:shadow disabled:bg-gray-300 dark:disabled:bg-white/[0.04] disabled:opacity-50 disabled:cursor-not-allowed"
+                    title={hasGenerationConfig ? (maskDraft ? '遮罩编辑 (Ctrl+Enter)' : '生成 (Ctrl+Enter)') : '请先选择渠道和模型'}
                   >
                     <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7l5 5m0 0l-5 5m5-5H6" />
@@ -989,20 +1165,36 @@ export default function InputBar() {
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v16l-7-4-7 4z" />
                   </svg>
                 </button>
+                <button
+                  onClick={handleOptimizePrompt}
+                  disabled={optimizingPrompt || !prompt.trim()}
+                  className="p-2.5 rounded-xl bg-gray-200 dark:bg-white/[0.06] hover:bg-gray-300 dark:hover:bg-white/[0.1] text-gray-500 dark:text-gray-300 transition-all shadow-sm flex-shrink-0 disabled:opacity-40 disabled:cursor-not-allowed"
+                  title="优化提示词"
+                >
+                  <svg className={`w-5 h-5 ${optimizingPrompt ? 'animate-spin' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 3 4 14h7l-1 7 9-11h-7l1-7z" />
+                  </svg>
+                </button>
+                <button
+                  onClick={() => setShowExperimentLab(true)}
+                  disabled={!prompt.trim()}
+                  className="p-2.5 rounded-xl bg-gray-200 dark:bg-white/[0.06] hover:bg-gray-300 dark:hover:bg-white/[0.1] text-gray-500 dark:text-gray-300 transition-all shadow-sm flex-shrink-0 disabled:opacity-40 disabled:cursor-not-allowed"
+                  title="A/B 对比实验"
+                >
+                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 7h16M7 12h10M10 17h4" />
+                  </svg>
+                </button>
                 <div
                   className="relative flex-1"
                   onMouseEnter={() => setSubmitHover(true)}
                   onMouseLeave={() => setSubmitHover(false)}
                 >
-                  <ButtonTooltip visible={settings.generationMode === 'direct' && !settings.apiKey && submitHover} text="尚未完成 API 配置，请在右上角设置中进行" />
+            <ButtonTooltip visible={!hasGenerationConfig && submitHover} text={missingChannelMessage} />
                   <button
-                    onClick={() => (settings.generationMode === 'server' || settings.apiKey) ? submitTask() : setShowSettings(true)}
-                    disabled={(settings.generationMode === 'server' || settings.apiKey) ? !canSubmit : false}
-                    className={`w-full flex items-center justify-center gap-2 py-2.5 rounded-xl text-sm font-medium transition-all shadow-sm ${
-                      settings.generationMode === 'direct' && !settings.apiKey
-                        ? 'bg-gray-300 dark:bg-white/[0.06] text-white cursor-pointer'
-                        : 'bg-blue-500 text-white hover:bg-blue-600 disabled:bg-gray-300 dark:disabled:bg-white/[0.04] disabled:opacity-50 disabled:cursor-not-allowed'
-                    }`}
+                    onClick={() => hasGenerationConfig ? submitTask() : handleMissingGenerationConfig()}
+                    disabled={hasGenerationConfig ? !canSubmit : false}
+                    className="w-full flex items-center justify-center gap-2 py-2.5 rounded-xl text-sm font-medium transition-all shadow-sm bg-blue-500 text-white hover:bg-blue-600 disabled:bg-gray-300 dark:disabled:bg-white/[0.04] disabled:opacity-50 disabled:cursor-not-allowed"
                   >
                     <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7l5 5m0 0l-5 5m5-5H6" />
@@ -1010,6 +1202,22 @@ export default function InputBar() {
                     {maskDraft ? '遮罩编辑' : '生成图像'}
                   </button>
                 </div>
+              </div>
+            </div>
+
+            <div className="mt-3 flex items-center justify-between gap-3 rounded-xl border border-gray-200/70 bg-white/60 px-3 py-2 text-xs text-gray-500 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-400">
+              <span>提交后</span>
+              <div className="w-44">
+                <Select
+                  value={composerClearMode}
+                  onChange={(value) => setComposerClearMode(value as typeof composerClearMode)}
+                  options={[
+                    { label: '清空提示词', value: 'prompt_only' },
+                    { label: '清空提示词和参考图', value: 'prompt_and_images' },
+                    { label: '保留当前内容', value: 'keep_all' },
+                  ]}
+                  className="rounded-lg border border-gray-200 bg-white px-3 py-2 text-xs dark:border-white/[0.08] dark:bg-white/[0.04] dark:text-gray-200"
+                />
               </div>
             </div>
           </div>

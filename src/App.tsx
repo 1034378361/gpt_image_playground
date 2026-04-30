@@ -1,71 +1,51 @@
-import { useEffect } from 'react'
-import { initStore } from './store'
+import { Suspense, lazy, useEffect } from 'react'
 import { useStore } from './store'
-import { normalizeBaseUrl } from './lib/api'
-import type { ApiMode } from './types'
+import { initStore } from './storeBackend'
+import AuthScreen from './components/AuthScreen'
 import Header from './components/Header'
+import ChannelLeaderboard from './components/ChannelLeaderboard'
 import SearchBar from './components/SearchBar'
-import TaskGrid from './components/TaskGrid'
-import TemplateFilterBar from './components/TemplateFilterBar'
-import TemplateGrid from './components/TemplateGrid'
-import InputBar from './components/InputBar'
-import DetailModal from './components/DetailModal'
-import TemplateDetailModal from './components/TemplateDetailModal'
-import TemplateEditorModal from './components/TemplateEditorModal'
-import Lightbox from './components/Lightbox'
-import SettingsModal from './components/SettingsModal'
-import ConfirmDialog from './components/ConfirmDialog'
 import Toast from './components/Toast'
-import MaskEditorModal from './components/MaskEditorModal'
-import ImageContextMenu from './components/ImageContextMenu'
-import TemplateVariableModal from './components/TemplateVariableModal'
+
+const TaskGrid = lazy(() => import('./components/TaskGrid'))
+const TemplateFilterBar = lazy(() => import('./components/TemplateFilterBar'))
+const TemplateGrid = lazy(() => import('./components/TemplateGrid'))
+const ProjectBoardBar = lazy(() => import('./components/ProjectBoardBar'))
+const InputBar = lazy(() => import('./components/InputBar'))
+const DetailModal = lazy(() => import('./components/DetailModal'))
+const TemplateDetailModal = lazy(() => import('./components/TemplateDetailModal'))
+const TemplateEditorModal = lazy(() => import('./components/TemplateEditorModal'))
+const ProjectManagerModal = lazy(() => import('./components/ProjectManagerModal'))
+const Lightbox = lazy(() => import('./components/Lightbox'))
+const SettingsModal = lazy(() => import('./components/SettingsModal'))
+const ConfirmDialog = lazy(() => import('./components/ConfirmDialog'))
+const MaskEditorModal = lazy(() => import('./components/MaskEditorModal'))
+const ImageContextMenu = lazy(() => import('./components/ImageContextMenu'))
+const TemplateVariableModal = lazy(() => import('./components/TemplateVariableModal'))
+
+function OverlayFallback() {
+  return null
+}
+
+function ViewFallback() {
+  return (
+    <div className="px-6 py-10">
+      <div className="rounded-3xl border border-gray-200 bg-white px-6 py-5 text-sm text-gray-500 shadow-sm dark:border-white/[0.08] dark:bg-gray-900 dark:text-gray-400">
+        正在加载页面内容...
+      </div>
+    </div>
+  )
+}
 
 export default function App() {
-  const setSettings = useStore((s) => s.setSettings)
   const currentView = useStore((s) => s.currentView)
+  const backendReady = useStore((s) => s.backendReady)
+  const backendUser = useStore((s) => s.backendUser)
+  const backendUnavailableReason = useStore((s) => s.backendUnavailableReason)
 
   useEffect(() => {
-    const searchParams = new URLSearchParams(window.location.search)
-    const nextSettings: { baseUrl?: string; apiKey?: string; codexCli?: boolean; apiMode?: ApiMode } = {
-      codexCli: false,
-      apiMode: 'images',
-    }
-
-    const apiUrlParam = searchParams.get('apiUrl')
-    if (apiUrlParam !== null) {
-      nextSettings.baseUrl = normalizeBaseUrl(apiUrlParam.trim())
-    }
-
-    const apiKeyParam = searchParams.get('apiKey')
-    if (apiKeyParam !== null) {
-      nextSettings.apiKey = apiKeyParam.trim()
-    }
-
-    const codexCliParam = searchParams.get('codexCli')
-    if (codexCliParam !== null) {
-      nextSettings.codexCli = codexCliParam.trim().toLowerCase() === 'true'
-    }
-
-    const apiModeParam = searchParams.get('apiMode')
-    if (apiModeParam === 'images' || apiModeParam === 'responses') {
-      nextSettings.apiMode = apiModeParam
-    }
-
-    setSettings(nextSettings)
-
-    if (searchParams.has('apiUrl') || searchParams.has('apiKey') || searchParams.has('codexCli') || searchParams.has('apiMode')) {
-      searchParams.delete('apiUrl')
-      searchParams.delete('apiKey')
-      searchParams.delete('codexCli')
-      searchParams.delete('apiMode')
-
-      const nextSearch = searchParams.toString()
-      const nextUrl = `${window.location.pathname}${nextSearch ? `?${nextSearch}` : ''}${window.location.hash}`
-      window.history.replaceState(null, '', nextUrl)
-    }
-
-    initStore()
-  }, [setSettings])
+    void initStore()
+  }, [])
 
   useEffect(() => {
     const preventPageImageDrag = (e: DragEvent) => {
@@ -78,33 +58,85 @@ export default function App() {
     return () => document.removeEventListener('dragstart', preventPageImageDrag)
   }, [])
 
+  if (!backendReady) {
+    return (
+      <>
+        <div className="min-h-screen bg-gray-50 text-gray-900 dark:bg-gray-950 dark:text-gray-100">
+          <div className="mx-auto flex min-h-screen max-w-5xl items-center justify-center px-6 py-10">
+            <div className="rounded-3xl border border-gray-200 bg-white px-8 py-6 text-sm text-gray-600 shadow-sm dark:border-white/[0.08] dark:bg-gray-900 dark:text-gray-300">
+              正在连接后端...
+            </div>
+          </div>
+        </div>
+        <Toast />
+      </>
+    )
+  }
+
+  if (!backendUser) {
+    if (backendUnavailableReason) {
+      return (
+        <>
+          <div className="min-h-screen bg-gray-50 text-gray-900 dark:bg-gray-950 dark:text-gray-100">
+            <div className="mx-auto flex min-h-screen max-w-3xl items-center justify-center px-6 py-10">
+              <div className="w-full rounded-3xl border border-amber-200 bg-white px-8 py-7 shadow-sm dark:border-amber-400/20 dark:bg-gray-900">
+                <h1 className="text-lg font-semibold text-gray-900 dark:text-gray-100">当前部署缺少后端</h1>
+                <p className="mt-3 text-sm leading-6 text-gray-600 dark:text-gray-300">{backendUnavailableReason}</p>
+                <p className="mt-3 text-sm leading-6 text-gray-500 dark:text-gray-400">
+                  这个版本已经改为后端统一登录、统一渠道配置和统一模板管理，不能再单独作为纯静态页面使用。
+                </p>
+              </div>
+            </div>
+          </div>
+          <Toast />
+        </>
+      )
+    }
+    return (
+      <>
+        <AuthScreen />
+        <Toast />
+      </>
+    )
+  }
+
   return (
     <>
       <Header />
       <main data-home-main className="safe-area-x max-w-7xl mx-auto pb-48">
-        {currentView === 'templates' ? (
-          <>
-            <TemplateFilterBar />
-            <TemplateGrid />
-          </>
-        ) : (
-          <>
-            <SearchBar />
-            <TaskGrid />
-          </>
-        )}
+        <Suspense fallback={<ViewFallback />}>
+          <ProjectBoardBar />
+          {currentView === 'templates' ? (
+            <>
+              <TemplateFilterBar />
+              <ChannelLeaderboard />
+              <TemplateGrid />
+            </>
+          ) : (
+            <>
+              <SearchBar />
+              <ChannelLeaderboard />
+              <TaskGrid />
+            </>
+          )}
+        </Suspense>
       </main>
-      <InputBar />
-      <DetailModal />
-      <TemplateDetailModal />
-      <TemplateEditorModal />
-      <Lightbox />
-      <SettingsModal />
-      <ConfirmDialog />
+      <Suspense fallback={<OverlayFallback />}>
+        <InputBar />
+        <DetailModal />
+        <TemplateDetailModal />
+        <TemplateEditorModal />
+        <ProjectManagerModal />
+        <Lightbox />
+        <SettingsModal />
+        <ConfirmDialog />
+      </Suspense>
       <Toast />
-      <MaskEditorModal />
-      <ImageContextMenu />
-      <TemplateVariableModal />
+      <Suspense fallback={<OverlayFallback />}>
+        <MaskEditorModal />
+        <ImageContextMenu />
+        <TemplateVariableModal />
+      </Suspense>
     </>
   )
 }

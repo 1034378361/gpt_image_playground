@@ -3,12 +3,14 @@ import type { TaskRecord } from '../types'
 import { useStore, getCachedImage, ensureImageCached, updateTaskInStore } from '../store'
 import { formatImageRatio } from '../lib/size'
 import { ParamValue } from '../lib/paramDisplay'
+import { getTaskFailureSummary, getTaskQueuePosition } from '../lib/taskDiagnostics'
 
 interface Props {
   task: TaskRecord
   onReuse: () => void
   onEditOutputs: () => void
   onDelete: () => void
+  onCancel: () => void
   onClick: (e: React.MouseEvent | React.TouchEvent) => void
   isSelected?: boolean
 }
@@ -18,6 +20,7 @@ export default function TaskCard({
   onReuse,
   onEditOutputs,
   onDelete,
+  onCancel,
   onClick,
   isSelected,
 }: Props) {
@@ -30,6 +33,7 @@ export default function TaskCard({
   const [swipeStartedSelected, setSwipeStartedSelected] = useState(false)
   const [swipeActionActive, setSwipeActionActive] = useState(false)
   const toggleTaskSelection = useStore((s) => s.toggleTaskSelection)
+  const allTasks = useStore((s) => s.tasks)
   const touchStartRef = useRef<{ x: number; y: number } | null>(null)
   const swipeResetTimerRef = useRef<number | null>(null)
   const suppressClickUntilRef = useRef(0)
@@ -101,12 +105,14 @@ export default function TaskCard({
     }
   }, [])
 
-  // 定时更新运行中任务的计时
+  const isActiveTask = task.status === 'queued' || task.status === 'running'
+
+  // 定时更新排队/运行中任务的计时
   useEffect(() => {
-    if (task.status !== 'running') return
+    if (!isActiveTask) return
     const id = setInterval(() => setNow(Date.now()), 1000)
     return () => clearInterval(id)
-  }, [task.status])
+  }, [isActiveTask])
 
   // 加载缩略图
   useEffect(() => {
@@ -149,7 +155,7 @@ export default function TaskCard({
 
   const duration = (() => {
     let seconds: number
-    if (task.status === 'running') {
+    if (isActiveTask) {
       seconds = Math.floor((now - task.createdAt) / 1000)
     } else if (task.elapsed != null) {
       seconds = Math.floor(task.elapsed / 1000)
@@ -163,6 +169,8 @@ export default function TaskCard({
   const aggregateActualParams = task.outputImages?.length
     ? { ...task.actualParams, n: task.outputImages.length }
     : task.actualParams
+  const queuePosition = task.status === 'queued' ? getTaskQueuePosition(allTasks, task.id) : null
+  const failureSummary = task.status === 'error' ? getTaskFailureSummary(task) : ''
   const isSwipeReady = Math.abs(swipeOffset) >= 40
   const showSwipeAction = isSwipeReady || swipeActionActive
   const swipeBgClass = showSwipeAction
@@ -194,7 +202,9 @@ export default function TaskCard({
         className={`relative bg-white dark:bg-gray-900 rounded-xl border overflow-hidden cursor-pointer duration-200 hover:shadow-lg dark:hover:bg-gray-800/80 ${
           !isSwiping ? 'transition-[box-shadow,border-color,background-color,transform]' : 'transition-[box-shadow,border-color,background-color]'
         } ${
-          task.status === 'running'
+          task.status === 'queued'
+            ? 'border-amber-300'
+            : task.status === 'running'
             ? 'border-blue-400 generating'
             : isSelected
             ? 'border-blue-500 shadow-md ring-2 ring-blue-500/50'
@@ -227,6 +237,16 @@ export default function TaskCard({
       <div className="flex h-40">
         {/* 左侧图片区域 */}
         <div className="w-40 min-w-[10rem] h-full bg-gray-100 dark:bg-black/20 relative flex items-center justify-center overflow-hidden flex-shrink-0">
+          {task.status === 'queued' && (
+            <div className="flex flex-col items-center gap-2">
+              <svg className="w-8 h-8 text-amber-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+              <span className="text-xs text-gray-400 dark:text-gray-500">
+                {queuePosition ? `排队中 #${queuePosition}` : '排队中...'}
+              </span>
+            </div>
+          )}
           {task.status === 'running' && (
             <div className="flex flex-col items-center gap-2">
               <svg
@@ -266,8 +286,16 @@ export default function TaskCard({
                   d="M12 9v2m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
                 />
               </svg>
-              <span className="text-xs text-red-400 text-center leading-tight">
-                失败
+              <span className="text-xs text-red-400 text-center leading-tight">{failureSummary}</span>
+            </div>
+          )}
+          {task.status === 'canceled' && (
+            <div className="flex flex-col items-center gap-1 px-2">
+              <svg className="w-7 h-7 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18 18 6M6 6l12 12" />
+              </svg>
+              <span className="text-xs text-gray-400 text-center leading-tight">
+                已取消
               </span>
             </div>
           )}
@@ -327,6 +355,20 @@ export default function TaskCard({
 
         {/* 右侧信息区域 */}
         <div className="flex-1 p-3 flex flex-col min-w-0">
+          {(task.variationLabel || task.projectId) && (
+            <div className="mb-2 flex flex-wrap gap-1.5">
+              {task.variationLabel && (
+                <span className="rounded-full bg-violet-50 px-2 py-0.5 text-[10px] text-violet-600 dark:bg-violet-500/10 dark:text-violet-300">
+                  {task.variationLabel}
+                </span>
+              )}
+              {task.projectId && (
+                <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] text-slate-600 dark:bg-white/[0.06] dark:text-slate-300">
+                  项目
+                </span>
+              )}
+            </div>
+          )}
           <div className="flex-1 min-h-0 mb-2">
             <p className="text-sm text-gray-700 dark:text-gray-300 leading-relaxed line-clamp-3">
               {task.prompt || '(无提示词)'}
@@ -414,6 +456,17 @@ export default function TaskCard({
                   />
                 </svg>
               </button>
+              {isActiveTask && (
+                <button
+                  onClick={onCancel}
+                  className="p-1.5 rounded-md hover:bg-amber-50 dark:hover:bg-amber-950/30 text-gray-400 hover:text-amber-500 transition"
+                  title="取消任务"
+                >
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18 18 6M6 6l12 12" />
+                  </svg>
+                </button>
+              )}
               <button
                 onClick={onDelete}
                 className="p-1.5 rounded-md hover:bg-red-50 dark:hover:bg-red-950/30 text-gray-400 hover:text-red-500 transition"

@@ -1,162 +1,82 @@
-import { useEffect, useRef, useState, useCallback } from 'react'
-import { normalizeBaseUrl } from '../lib/api'
-import {
-  useStore,
-  exportData,
-  importData,
-  clearAllData,
-  loginBackend,
-  logoutBackend,
-  registerBackend,
-  loadBackendSession,
-  syncServerData,
-} from '../store'
-import { DEFAULT_IMAGES_MODEL, DEFAULT_RESPONSES_MODEL, DEFAULT_SETTINGS, type AppSettings } from '../types'
+import { useRef, type ChangeEvent } from 'react'
+import { clearAllData, exportData, importData, useStore } from '../store'
+import { loadBackendSession, previewSystemBackupFile } from '../storeBackend'
 import { useCloseOnEscape } from '../hooks/useCloseOnEscape'
-import Select from './Select'
+import AdminChannelManager from './AdminChannelManager'
+import AdminOpenPromptSources from './AdminOpenPromptSources'
+import AdminAuditLog from './AdminAuditLog'
+import AdminUserManager from './AdminUserManager'
+import { canManageSystem, canOpenSettings, canReviewTemplates, roleLabel } from '../lib/roles'
 
 export default function SettingsModal() {
   const showSettings = useStore((s) => s.showSettings)
   const setShowSettings = useStore((s) => s.setShowSettings)
-  const settings = useStore((s) => s.settings)
-  const setSettings = useStore((s) => s.setSettings)
   const backendUser = useStore((s) => s.backendUser)
   const setConfirmDialog = useStore((s) => s.setConfirmDialog)
-  const showToast = useStore((s) => s.showToast)
   const importInputRef = useRef<HTMLInputElement>(null)
-  const [draft, setDraft] = useState<AppSettings>(settings)
-  const [timeoutInput, setTimeoutInput] = useState(String(settings.timeout))
-  const [showApiKey, setShowApiKey] = useState(false)
-  const [backendUsername, setBackendUsername] = useState('')
-  const [backendPassword, setBackendPassword] = useState('')
-  const [backendBusy, setBackendBusy] = useState(false)
 
-  const getDefaultModelForMode = (apiMode: AppSettings['apiMode']) =>
-    apiMode === 'responses' ? DEFAULT_RESPONSES_MODEL : DEFAULT_IMAGES_MODEL
+  const visible = showSettings && canOpenSettings(backendUser)
 
-  useEffect(() => {
-    if (showSettings) {
-      setDraft(settings)
-      setTimeoutInput(String(settings.timeout))
-    }
-  }, [showSettings, settings])
+  useCloseOnEscape(visible, () => setShowSettings(false))
 
-  const commitSettings = (nextDraft: AppSettings) => {
-    const apiMode = nextDraft.apiMode === 'responses' ? 'responses' : DEFAULT_SETTINGS.apiMode
-    const defaultModel = getDefaultModelForMode(apiMode)
-    const storageMode: AppSettings['storageMode'] = nextDraft.storageMode === 'server' ? 'server' : 'local'
-    const generationMode: AppSettings['generationMode'] = nextDraft.generationMode === 'server' ? 'server' : 'direct'
-    const normalizedDraft: AppSettings = {
-      ...nextDraft,
-      apiMode,
-      baseUrl: normalizeBaseUrl(nextDraft.baseUrl.trim() || DEFAULT_SETTINGS.baseUrl),
-      apiKey: nextDraft.apiKey,
-      model: nextDraft.model.trim() || defaultModel,
-      timeout: Number(nextDraft.timeout) || DEFAULT_SETTINGS.timeout,
-      backendUrl: nextDraft.backendUrl.trim(),
-      storageMode,
-      generationMode,
-    }
-    setDraft(normalizedDraft)
-    setSettings(normalizedDraft)
-  }
+  if (!visible || !backendUser) return null
 
-  const handleClose = () => {
-    const nextTimeout = Number(timeoutInput)
-    commitSettings({
-      ...draft,
-      timeout:
-        timeoutInput.trim() === '' || Number.isNaN(nextTimeout)
-          ? DEFAULT_SETTINGS.timeout
-          : nextTimeout,
-    })
-    setShowSettings(false)
-  }
+  const isAdmin = canManageSystem(backendUser)
+  const canReview = canReviewTemplates(backendUser)
 
-  const commitTimeout = useCallback(() => {
-    const nextTimeout = Number(timeoutInput)
-    const normalizedTimeout =
-      timeoutInput.trim() === '' ? DEFAULT_SETTINGS.timeout : Number.isNaN(nextTimeout) ? draft.timeout : nextTimeout
-    setTimeoutInput(String(normalizedTimeout))
-    commitSettings({ ...draft, timeout: normalizedTimeout })
-  }, [draft, timeoutInput])
-
-  useCloseOnEscape(showSettings, handleClose)
-
-  if (!showSettings) return null
-
-  const handleImport = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleImport = async (e: ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
-    if (file) importData(file)
     e.target.value = ''
-  }
-
-  const validateBackendCredentials = () => {
-    const username = backendUsername.trim()
-    if (!username) {
-      showToast('请输入后端账户用户名', 'error')
-      return null
-    }
-    if (username.length < 3) {
-      showToast('用户名至少需要 3 位', 'error')
-      return null
-    }
-    if (!backendPassword) {
-      showToast('请输入后端账户密码', 'error')
-      return null
-    }
-    if (backendPassword.length < 8) {
-      showToast('密码至少需要 8 位', 'error')
-      return null
-    }
-    return { username, password: backendPassword }
-  }
-
-  const runBackendAction = async (action: () => Promise<void>) => {
-    setBackendBusy(true)
+    if (!file || !isAdmin) return
     try {
-      await action()
-      setBackendPassword('')
+      const preview = await previewSystemBackupFile(file)
+      const counts = preview.tableCounts
+      const lines = [
+        `将导入 ${file.name}`,
+        '',
+        `用户 ${counts.users ?? 0} · 项目 ${counts.projects ?? 0} · 模板 ${counts.prompt_templates ?? 0}`,
+        `任务 ${counts.generation_tasks ?? 0} · 资源 ${counts.assets ?? 0} · 渠道 ${counts.api_channels ?? 0}`,
+        `审计 ${counts.audit_logs ?? 0} · 总记录 ${preview.totalRecords} · 文件资源 ${preview.assetFileCount}`,
+        '',
+        '导入前系统会自动创建一个恢复点，便于回滚。',
+      ]
+      setConfirmDialog({
+        title: '导入服务端备份',
+        message: lines.join('\n'),
+        confirmText: '确认导入',
+        confirmKeyword: '导入服务端备份',
+        confirmHint: '这是高风险操作。请输入“导入服务端备份”后继续。',
+        tone: 'danger',
+        action: () => {
+          void importData(file)
+        },
+      })
     } catch (err) {
-      showToast(err instanceof Error ? err.message : String(err), 'error')
-    } finally {
-      setBackendBusy(false)
+      useStore.getState().showToast(err instanceof Error ? err.message : String(err), 'error')
     }
-  }
-
-  const handleBackendLogin = () => {
-    const credentials = validateBackendCredentials()
-    if (!credentials) return
-    void runBackendAction(() => loginBackend(credentials.username, credentials.password))
-  }
-
-  const handleBackendRegister = () => {
-    const credentials = validateBackendCredentials()
-    if (!credentials) return
-    void runBackendAction(() => registerBackend(credentials.username, credentials.password))
   }
 
   return (
     <div className="fixed inset-0 z-[70] flex items-center justify-center p-4">
       <div
         className="absolute inset-0 bg-black/30 backdrop-blur-sm animate-overlay-in"
-        onClick={handleClose}
+        onClick={() => setShowSettings(false)}
       />
       <div
-        className="relative z-10 w-full max-w-md rounded-3xl border border-white/50 bg-white/95 p-5 shadow-2xl ring-1 ring-black/5 animate-modal-in dark:border-white/[0.08] dark:bg-gray-900/95 dark:ring-white/10 overflow-y-auto max-h-[85vh] custom-scrollbar"
+        className="relative z-10 w-full max-w-4xl rounded-3xl border border-white/50 bg-white/95 p-5 shadow-2xl ring-1 ring-black/5 animate-modal-in dark:border-white/[0.08] dark:bg-gray-900/95 dark:ring-white/10 overflow-y-auto max-h-[85vh] custom-scrollbar"
       >
         <div className="mb-5 flex items-center justify-between gap-4">
-          <h3 className="text-base font-semibold text-gray-800 dark:text-gray-100 flex items-center gap-2">
-            <svg className="w-5 h-5 text-blue-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-            </svg>
-            设置
-          </h3>
+          <div>
+            <h3 className="text-base font-semibold text-gray-800 dark:text-gray-100">管理控制台</h3>
+            <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">当前登录：{backendUser.username}</p>
+          </div>
           <div className="flex items-center gap-3">
+            <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-[11px] text-emerald-700 dark:bg-emerald-400/15 dark:text-emerald-200">
+              {roleLabel(backendUser.role)}
+            </span>
             <span className="text-xs text-gray-400 dark:text-gray-500 font-mono select-none">v{__APP_VERSION__}</span>
             <button
-              onClick={handleClose}
+              onClick={() => setShowSettings(false)}
               className="rounded-full p-1 text-gray-400 transition hover:bg-gray-100 hover:text-gray-600 dark:hover:bg-white/[0.06] dark:hover:text-gray-200"
               aria-label="关闭"
             >
@@ -167,326 +87,73 @@ export default function SettingsModal() {
           </div>
         </div>
 
-        <div className="space-y-6">
-          <section>
-            <h4 className="mb-4 text-sm font-medium text-gray-800 dark:text-gray-200 flex items-center gap-1.5">
-              <svg className="w-4 h-4 text-gray-400 dark:text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z" />
-              </svg>
-              API 配置
-            </h4>
-            <div className="space-y-4">
-              <label className="block">
-                <div className="mb-1 flex items-center justify-between">
-                  <span className="block text-xs text-gray-500 dark:text-gray-400">API URL</span>
-                  <div
-                    onClick={(e) => {
-                      e.preventDefault()
-                      const nextDraft = { ...draft, codexCli: !draft.codexCli }
-                      setDraft(nextDraft)
-                      commitSettings(nextDraft)
-                    }}
-                    className="flex cursor-pointer items-center gap-1.5"
-                    role="switch"
-                    aria-checked={draft.codexCli}
-                  >
-                    <span className={`text-[10px] transition-colors ${draft.codexCli ? 'text-blue-500 dark:text-blue-400' : 'text-gray-400 dark:text-gray-500'}`}>Codex CLI</span>
-                    <span className={`relative inline-flex h-3.5 w-6 items-center rounded-full transition-colors ${draft.codexCli ? 'bg-blue-500' : 'bg-gray-300 dark:bg-gray-600'}`}>
-                      <span className={`inline-block h-2.5 w-2.5 transform rounded-full bg-white shadow transition-transform ${draft.codexCli ? 'translate-x-[11px]' : 'translate-x-[2px]'}`} />
-                    </span>
-                  </div>
-                </div>
-                <input
-                  value={draft.baseUrl}
-                  onChange={(e) => setDraft((prev) => ({ ...prev, baseUrl: e.target.value }))}
-                  onBlur={(e) => commitSettings({ ...draft, baseUrl: e.target.value })}
-                  type="text"
-                  placeholder={DEFAULT_SETTINGS.baseUrl}
-                  className="w-full rounded-xl border border-gray-200/70 bg-white/60 px-3 py-2 text-sm text-gray-700 outline-none transition focus:border-blue-300 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200 dark:focus:border-blue-500/50"
-                />
-                <div className="mt-1 text-[10px] text-gray-400 dark:text-gray-500">
-                  支持通过查询参数覆盖：<code className="bg-gray-100 dark:bg-white/[0.06] px-1 py-0.5 rounded">?apiUrl=</code>，<code className="bg-gray-100 dark:bg-white/[0.06] px-1 py-0.5 rounded">codexCli=true</code>
-                </div>
-              </label>
-
-              <div className="block">
-                <span className="block text-xs text-gray-500 dark:text-gray-400 mb-1">API Key</span>
-                <div className="relative">
-                  <input
-                    value={draft.apiKey}
-                    onChange={(e) => setDraft((prev) => ({ ...prev, apiKey: e.target.value }))}
-                    onBlur={(e) => commitSettings({ ...draft, apiKey: e.target.value })}
-                    type={showApiKey ? 'text' : 'password'}
-                    placeholder="sk-..."
-                    className="w-full rounded-xl border border-gray-200/70 bg-white/60 px-3 py-2 pr-10 text-sm text-gray-700 outline-none transition focus:border-blue-300 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200 dark:focus:border-blue-500/50"
-                  />
-                  <button
-                    type="button"
-                    onClick={() => setShowApiKey((v) => !v)}
-                    className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-gray-400 hover:text-gray-600 transition-colors"
-                    tabIndex={-1}
-                  >
-                    {showApiKey ? (
-                      <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" viewBox="0 0 24 24">
-                        <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
-                        <circle cx="12" cy="12" r="3" />
-                      </svg>
-                    ) : (
-                      <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" viewBox="0 0 24 24">
-                        <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94" />
-                        <path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19" />
-                        <path d="M14.12 14.12a3 3 0 1 1-4.24-4.24" />
-                        <line x1="1" y1="1" x2="23" y2="23" />
-                      </svg>
-                    )}
-                  </button>
-                </div>
-                <div className="mt-1 text-[10px] text-gray-400 dark:text-gray-500">
-                  支持通过查询参数覆盖：<code className="bg-gray-100 dark:bg-white/[0.06] px-1 py-0.5 rounded">?apiKey=</code>
-                </div>
-              </div>
-
-              <label className="block">
-                <span className="block text-xs text-gray-500 dark:text-gray-400 mb-1">API 接口</span>
-                <Select
-                  value={draft.apiMode ?? DEFAULT_SETTINGS.apiMode}
-                  onChange={(value) => {
-                    const apiMode = value as AppSettings['apiMode']
-                    const nextModel =
-                      draft.model === DEFAULT_IMAGES_MODEL || draft.model === DEFAULT_RESPONSES_MODEL
-                        ? getDefaultModelForMode(apiMode)
-                        : draft.model
-                    const nextDraft = { ...draft, apiMode, model: nextModel }
-                    setDraft(nextDraft)
-                    commitSettings(nextDraft)
-                  }}
-                  options={[
-                    { label: 'Images API (/v1/images)', value: 'images' },
-                    { label: 'Responses API (/v1/responses)', value: 'responses' },
-                  ]}
-                  className="w-full rounded-xl border border-gray-200/70 bg-white/60 px-3 py-2 text-sm text-gray-700 outline-none transition focus:border-blue-300 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200 dark:focus:border-blue-500/50"
-                />
-                <div className="mt-1 text-[10px] text-gray-400 dark:text-gray-500">
-                  支持通过查询参数覆盖：<code className="rounded bg-gray-100 px-1 py-0.5 dark:bg-white/[0.06]">apiMode=images</code> 或 <code className="rounded bg-gray-100 px-1 py-0.5 dark:bg-white/[0.06]">apiMode=responses</code>。
-                </div>
-              </label>
-
-              <label className="block">
-                <span className="block text-xs text-gray-500 dark:text-gray-400 mb-1">
-                  模型 ID
-                </span>
-                <input
-                  value={draft.model}
-                  onChange={(e) => setDraft((prev) => ({ ...prev, model: e.target.value }))}
-                  onBlur={(e) => commitSettings({ ...draft, model: e.target.value })}
-                  type="text"
-                  placeholder={getDefaultModelForMode(draft.apiMode ?? DEFAULT_SETTINGS.apiMode)}
-                  className="w-full rounded-xl border border-gray-200/70 bg-white/60 px-3 py-2 text-sm text-gray-700 outline-none transition focus:border-blue-300 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200 dark:focus:border-blue-500/50"
-                />
-                <div className="mt-1 text-[10px] text-gray-400 dark:text-gray-500">
-                  {(draft.apiMode ?? DEFAULT_SETTINGS.apiMode) === 'responses' ? (
-                    <>Responses API 需要使用支持 <code className="rounded bg-gray-100 px-1 py-0.5 dark:bg-white/[0.06]">image_generation</code> 工具的文本模型，例如 <code className="rounded bg-gray-100 px-1 py-0.5 dark:bg-white/[0.06]">{DEFAULT_RESPONSES_MODEL}</code>。</>
-                  ) : (
-                    <>Images API 需要使用 GPT Image 模型，例如 <code className="rounded bg-gray-100 px-1 py-0.5 dark:bg-white/[0.06]">{DEFAULT_IMAGES_MODEL}</code>。</>
-                  )}
-                </div>
-              </label>
-
-              <label className="block">
-                <span className="block text-xs text-gray-500 dark:text-gray-400 mb-1">请求超时 (秒)</span>
-                <input
-                  value={timeoutInput}
-                  onChange={(e) => setTimeoutInput(e.target.value)}
-                  onBlur={commitTimeout}
-                  type="number"
-                  min={10}
-                  max={600}
-                  className="w-full rounded-xl border border-gray-200/70 bg-white/60 px-3 py-2 text-sm text-gray-700 outline-none transition focus:border-blue-300 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200 dark:focus:border-blue-500/50"
-                />
-              </label>
-            </div>
-          </section>
-
-          <section className="pt-6 border-t border-gray-100 dark:border-white/[0.08]">
-            <h4 className="mb-4 text-sm font-medium text-gray-800 dark:text-gray-200 flex items-center gap-1.5">
-              <svg className="w-4 h-4 text-gray-400 dark:text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6l4 2m6-2a10 10 0 1 1-20 0 10 10 0 0 1 20 0z" />
-              </svg>
-              后端与账户
-            </h4>
-            <div className="space-y-4">
-              <label className="block">
-                <span className="block text-xs text-gray-500 dark:text-gray-400 mb-1">后端地址</span>
-                <input
-                  value={draft.backendUrl}
-                  onChange={(e) => setDraft((prev) => ({ ...prev, backendUrl: e.target.value }))}
-                  onBlur={(e) => commitSettings({ ...draft, backendUrl: e.target.value })}
-                  type="text"
-                  placeholder="留空使用同源 /api"
-                  className="w-full rounded-xl border border-gray-200/70 bg-white/60 px-3 py-2 text-sm text-gray-700 outline-none transition focus:border-blue-300 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200 dark:focus:border-blue-500/50"
-                />
-              </label>
-
-              <div className="grid grid-cols-2 gap-2">
-                <label className="block">
-                  <span className="block text-xs text-gray-500 dark:text-gray-400 mb-1">模板/任务数据</span>
-                  <Select
-                    value={draft.storageMode}
-                    onChange={(value) => {
-                      const nextDraft = { ...draft, storageMode: value as AppSettings['storageMode'] }
-                      setDraft(nextDraft)
-                      commitSettings(nextDraft)
-                      if (value === 'server') void loadBackendSession()
-                    }}
-                    options={[
-                      { label: '本地 IndexedDB', value: 'local' },
-                      { label: '后端同步', value: 'server' },
-                    ]}
-                    className="w-full rounded-xl border border-gray-200/70 bg-white/60 px-3 py-2 text-sm text-gray-700 outline-none transition focus:border-blue-300 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200 dark:focus:border-blue-500/50"
-                  />
-                </label>
-                <label className="block">
-                  <span className="block text-xs text-gray-500 dark:text-gray-400 mb-1">生图请求</span>
-                  <Select
-                    value={draft.generationMode}
-                    onChange={(value) => {
-                      const nextDraft = { ...draft, generationMode: value as AppSettings['generationMode'] }
-                      setDraft(nextDraft)
-                      commitSettings(nextDraft)
-                      if (value === 'server') void loadBackendSession()
-                    }}
-                    options={[
-                      { label: '前端直连', value: 'direct' },
-                      { label: '后端代理', value: 'server' },
-                    ]}
-                    className="w-full rounded-xl border border-gray-200/70 bg-white/60 px-3 py-2 text-sm text-gray-700 outline-none transition focus:border-blue-300 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200 dark:focus:border-blue-500/50"
-                  />
-                </label>
-              </div>
-
-              {backendUser ? (
-                <div className="rounded-xl border border-green-200/70 bg-green-50/70 p-3 dark:border-green-400/20 dark:bg-green-500/10">
-                  <div className="flex items-center justify-between gap-3">
-                    <div className="min-w-0">
-                      <p className="truncate text-sm font-medium text-green-700 dark:text-green-300">
-                        已登录：{backendUser.username}
-                      </p>
-                      <p className="mt-0.5 text-xs text-green-600/80 dark:text-green-300/70">
-                        后端模板和代理生图会按此用户隔离
-                      </p>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => runBackendAction(logoutBackend)}
-                      disabled={backendBusy}
-                      className="rounded-lg bg-white/80 px-3 py-1.5 text-sm text-green-700 hover:bg-white disabled:opacity-50 dark:bg-white/[0.08] dark:text-green-300 dark:hover:bg-white/[0.12]"
-                    >
-                      退出
-                    </button>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => runBackendAction(syncServerData)}
-                    disabled={backendBusy}
-                    className="mt-3 w-full rounded-lg bg-green-600 px-3 py-2 text-sm font-medium text-white hover:bg-green-700 disabled:opacity-50"
-                  >
-                    同步后端数据
-                  </button>
-                </div>
-              ) : (
-                <div className="rounded-xl border border-gray-200/70 bg-gray-50/70 p-3 dark:border-white/[0.08] dark:bg-white/[0.03]">
-                  <div className="grid grid-cols-1 gap-2">
-                    <input
-                      value={backendUsername}
-                      onChange={(e) => setBackendUsername(e.target.value)}
-                      type="text"
-                      placeholder="用户名"
-                      className="rounded-xl border border-gray-200/70 bg-white/80 px-3 py-2 text-sm text-gray-700 outline-none transition focus:border-blue-300 dark:border-white/[0.08] dark:bg-white/[0.04] dark:text-gray-200"
-                    />
-                    <input
-                      value={backendPassword}
-                      onChange={(e) => setBackendPassword(e.target.value)}
-                      type="password"
-                      placeholder="密码（至少 8 位）"
-                      className="rounded-xl border border-gray-200/70 bg-white/80 px-3 py-2 text-sm text-gray-700 outline-none transition focus:border-blue-300 dark:border-white/[0.08] dark:bg-white/[0.04] dark:text-gray-200"
-                    />
-                    <div className="flex gap-2">
-                      <button
-                        type="button"
-                        onClick={handleBackendLogin}
-                        disabled={backendBusy}
-                        className="flex-1 rounded-xl bg-blue-500 px-3 py-2 text-sm font-medium text-white hover:bg-blue-600 disabled:cursor-wait disabled:opacity-50"
-                      >
-                        登录
-                      </button>
-                      <button
-                        type="button"
-                        onClick={handleBackendRegister}
-                        disabled={backendBusy}
-                        className="flex-1 rounded-xl bg-gray-800 px-3 py-2 text-sm font-medium text-white hover:bg-gray-900 disabled:cursor-wait disabled:opacity-50 dark:bg-white/[0.12] dark:hover:bg-white/[0.18]"
-                      >
-                        注册
-                      </button>
-                    </div>
-                    <p className="text-xs text-gray-400 dark:text-gray-500">
-                      首次使用请先注册本地后端账户；用户名至少 3 位，密码至少 8 位。
-                    </p>
-                  </div>
-                </div>
-              )}
-            </div>
-          </section>
-
-          <section className="pt-6 border-t border-gray-100 dark:border-white/[0.08]">
-            <h4 className="mb-4 text-sm font-medium text-gray-800 dark:text-gray-200 flex items-center gap-1.5">
-              <svg className="w-4 h-4 text-gray-400 dark:text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4" />
-              </svg>
-              数据管理
-            </h4>
-            <div className="space-y-3">
-              <div className="flex gap-2">
-                <button
-                  onClick={() => exportData()}
-                  className="flex-1 rounded-xl bg-gray-100/80 px-4 py-2.5 text-sm text-gray-600 transition hover:bg-gray-200 dark:bg-white/[0.06] dark:text-gray-300 dark:hover:bg-white/[0.1] flex items-center justify-center gap-1.5"
-                >
-                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-                  </svg>
-                  导出
-                </button>
-                <button
-                  onClick={() => importInputRef.current?.click()}
-                  className="flex-1 rounded-xl bg-gray-100/80 px-4 py-2.5 text-sm text-gray-600 transition hover:bg-gray-200 dark:bg-white/[0.06] dark:text-gray-300 dark:hover:bg-white/[0.1] flex items-center justify-center gap-1.5"
-                >
-                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
-                  </svg>
-                  导入
-                </button>
-                <input
-                  ref={importInputRef}
-                  type="file"
-                  accept=".zip"
-                  className="hidden"
-                  onChange={handleImport}
-                />
-              </div>
-              <button
-                onClick={() =>
-                  setConfirmDialog({
-                    title: '清空所有数据',
-                    message: '确定要清空所有任务记录和图片数据吗？此操作不可恢复。',
-                    action: () => clearAllData(),
-                  })
-                }
-                className="w-full rounded-xl border border-red-200/80 bg-red-50/50 px-4 py-2.5 text-sm text-red-500 transition hover:bg-red-100/80 dark:border-red-500/20 dark:bg-red-500/10 dark:text-red-400 dark:hover:bg-red-500/20"
-              >
-                清空所有数据
-              </button>
-            </div>
-          </section>
+        <div className="rounded-xl border border-blue-200/70 bg-blue-50/80 p-3 text-sm text-blue-700 dark:border-blue-400/20 dark:bg-blue-500/10 dark:text-blue-200">
+          {isAdmin
+            ? '管理员可以在这里统一维护上游渠道、模型、API Key、Base URL、请求超时、用户角色和服务端备份。普通用户不会看到这个界面。'
+            : '审核员可以在这里处理公共模板审核与开源模板导入，但无法查看渠道密钥、系统备份或用户角色配置。'}
         </div>
+
+        {isAdmin && <AdminUserManager />}
+        {isAdmin && <AdminChannelManager />}
+        {canReview && <AdminOpenPromptSources />}
+        {isAdmin && <AdminAuditLog />}
+
+        {isAdmin && (
+          <section className="pt-6 border-t border-gray-100 dark:border-white/[0.08]">
+          <div className="mb-4 flex items-center justify-between gap-3">
+            <h4 className="text-sm font-medium text-gray-800 dark:text-gray-200">管理操作</h4>
+            <button
+              type="button"
+              onClick={() => void loadBackendSession()}
+              className="rounded-xl bg-white px-3 py-2 text-sm text-gray-600 hover:bg-gray-100 dark:bg-white/[0.06] dark:text-gray-300 dark:hover:bg-white/[0.1]"
+            >
+              刷新后端数据
+            </button>
+          </div>
+          <div className="space-y-3">
+            <div className="flex gap-2">
+              <button
+                onClick={() => exportData()}
+                className="flex-1 rounded-xl bg-gray-100/80 px-4 py-2.5 text-sm text-gray-600 transition hover:bg-gray-200 dark:bg-white/[0.06] dark:text-gray-300 dark:hover:bg-white/[0.1]"
+              >
+                导出服务端备份
+              </button>
+              <button
+                onClick={() => importInputRef.current?.click()}
+                className="flex-1 rounded-xl bg-gray-100/80 px-4 py-2.5 text-sm text-gray-600 transition hover:bg-gray-200 dark:bg-white/[0.06] dark:text-gray-300 dark:hover:bg-white/[0.1]"
+              >
+                导入服务端备份
+              </button>
+              <input
+                ref={importInputRef}
+                type="file"
+                accept=".zip"
+                className="hidden"
+                onChange={handleImport}
+              />
+            </div>
+            <button
+              onClick={() =>
+                setConfirmDialog({
+                  title: '清空本地缓存',
+                  message: '这只会清空当前浏览器中的本地任务缓存、本地模板缓存、图片缓存和本地参数配置。\n\n不会删除后端数据库中的用户、项目、模板、任务和图片资源。刷新同步后，后端数据仍会重新加载。',
+                  confirmText: '确认清空',
+                  confirmKeyword: '清空本地缓存',
+                  confirmHint: '这是高风险操作。请输入“清空本地缓存”后才可继续。',
+                  tone: 'danger',
+                  action: () => clearAllData(),
+                })
+              }
+              className="w-full rounded-xl border border-red-200/80 bg-red-50/50 px-4 py-2.5 text-sm text-red-500 transition hover:bg-red-100/80 dark:border-red-500/20 dark:bg-red-500/10 dark:text-red-400 dark:hover:bg-red-500/20"
+            >
+              清空本地缓存
+            </button>
+            <p className="text-xs leading-relaxed text-gray-400 dark:text-gray-500">
+              备份导出和导入会直接作用于后端数据库；清空本地缓存只影响当前浏览器。
+            </p>
+          </div>
+          </section>
+        )}
       </div>
     </div>
   )
