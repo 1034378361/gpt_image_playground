@@ -52,6 +52,39 @@ def init_db(conn: sqlite3.Connection | None = None) -> None:
               expires_at INTEGER
             );
 
+            CREATE TABLE IF NOT EXISTS auth_settings (
+              id TEXT PRIMARY KEY,
+              registration_mode TEXT NOT NULL DEFAULT 'open',
+              updated_at INTEGER NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS registration_invite_codes (
+              id TEXT PRIMARY KEY,
+              code TEXT UNIQUE NOT NULL,
+              note TEXT NOT NULL DEFAULT '',
+              max_uses INTEGER,
+              used_count INTEGER NOT NULL DEFAULT 0,
+              is_enabled INTEGER NOT NULL DEFAULT 1,
+              expires_at INTEGER,
+              created_at INTEGER NOT NULL,
+              updated_at INTEGER NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_registration_invite_codes_enabled_updated
+              ON registration_invite_codes(is_enabled, updated_at DESC);
+
+            CREATE TABLE IF NOT EXISTS registration_invite_code_uses (
+              id TEXT PRIMARY KEY,
+              invite_code_id TEXT REFERENCES registration_invite_codes(id) ON DELETE SET NULL,
+              invite_code TEXT NOT NULL,
+              user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+              username TEXT NOT NULL DEFAULT '',
+              used_at INTEGER NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_registration_invite_code_uses_invite_used
+              ON registration_invite_code_uses(invite_code_id, used_at DESC);
+
             CREATE TABLE IF NOT EXISTS projects (
               id TEXT PRIMARY KEY,
               user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,

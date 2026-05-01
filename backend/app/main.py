@@ -46,6 +46,9 @@ from .schemas import (
     ApiChannelOut,
     ApiChannelPatch,
     AssetOut,
+    AuthRegisterIn,
+    AuthSettingsOut,
+    AuthSettingsPatch,
     AutoImportRunOut,
     AutoImportSettingsOut,
     AutoImportSettingsPatch,
@@ -89,6 +92,11 @@ from .schemas import (
     TemplatePackImportOut,
     TemplateSampleOut,
     TemplateVersionOut,
+    InviteCodeIn,
+    InviteCodeBatchIn,
+    InviteCodeOut,
+    InviteCodePatch,
+    InviteCodeUseOut,
     UserRolePatchIn,
     UserOut,
 )
@@ -128,6 +136,9 @@ DEFAULT_AUTO_IMPORT_SETTINGS: dict[str, Any] = {
     "maxRepositories": 12,
     "maxTemplatesPerRun": 80,
     "minHotScore": 20.0,
+}
+DEFAULT_AUTH_SETTINGS: dict[str, Any] = {
+    "registrationMode": "open",
 }
 GENERATION_RUNTIME: GenerationRuntime
 
@@ -180,6 +191,9 @@ def json_loads(value: str | None, fallback: Any) -> Any:
 
 SERVER_BACKUP_TABLES = [
     "users",
+    "auth_settings",
+    "registration_invite_codes",
+    "registration_invite_code_uses",
     "projects",
     "prompt_templates",
     "prompt_template_versions",
@@ -364,11 +378,14 @@ def restore_server_backup_archive(archive_bytes: bytes, response: Response, acto
         "generation_tasks",
         "prompt_templates",
         "projects",
+        "registration_invite_code_uses",
+        "registration_invite_codes",
         "api_channels",
         "audit_logs",
         "open_prompt_discoveries",
         "auto_import_runs",
         "auto_import_settings",
+        "auth_settings",
         "users",
     ]
 
@@ -389,6 +406,56 @@ def restore_server_backup_archive(archive_bytes: bytes, response: Response, acto
                     row["role"],
                     row["created_at"],
                     row["updated_at"],
+                ),
+            )
+
+        for row in tables.get("auth_settings") or []:
+            conn.execute(
+                """
+                INSERT INTO auth_settings (id, registration_mode, updated_at)
+                VALUES (?, ?, ?)
+                """,
+                (
+                    row["id"],
+                    row.get("registration_mode", DEFAULT_AUTH_SETTINGS["registrationMode"]),
+                    row["updated_at"],
+                ),
+            )
+
+        for row in tables.get("registration_invite_codes") or []:
+            conn.execute(
+                """
+                INSERT INTO registration_invite_codes (
+                  id, code, note, max_uses, used_count, is_enabled, expires_at, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    row["id"],
+                    row["code"],
+                    row.get("note", ""),
+                    row.get("max_uses"),
+                    row.get("used_count", 0),
+                    row.get("is_enabled", 1),
+                    row.get("expires_at"),
+                    row["created_at"],
+                    row["updated_at"],
+                ),
+            )
+
+        for row in tables.get("registration_invite_code_uses") or []:
+            conn.execute(
+                """
+                INSERT INTO registration_invite_code_uses (
+                  id, invite_code_id, invite_code, user_id, username, used_at
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    row["id"],
+                    row.get("invite_code_id"),
+                    row["invite_code"],
+                    row.get("user_id"),
+                    row.get("username", ""),
+                    row["used_at"],
                 ),
             )
 
@@ -774,6 +841,172 @@ def row_to_user(row: Any) -> UserOut:
         createdAt=row["created_at"],
         updatedAt=row["updated_at"],
     )
+
+
+def get_auth_settings_row(conn: Any) -> Any | None:
+    return conn.execute("SELECT * FROM auth_settings WHERE id = 'default'").fetchone()
+
+
+def get_auth_settings(conn: Any) -> dict[str, Any]:
+    row = get_auth_settings_row(conn)
+    if not row:
+        return {**DEFAULT_AUTH_SETTINGS, "updatedAt": None}
+    return {
+        "registrationMode": row["registration_mode"] or DEFAULT_AUTH_SETTINGS["registrationMode"],
+        "updatedAt": row["updated_at"],
+    }
+
+
+def save_auth_settings(conn: Any, registration_mode: str) -> dict[str, Any]:
+    ts = now_ms()
+    conn.execute(
+        """
+        INSERT INTO auth_settings (id, registration_mode, updated_at)
+        VALUES ('default', ?, ?)
+        ON CONFLICT(id) DO UPDATE SET
+          registration_mode = excluded.registration_mode,
+          updated_at = excluded.updated_at
+        """,
+        (registration_mode, ts),
+    )
+    return {
+        "registrationMode": registration_mode,
+        "updatedAt": ts,
+    }
+
+
+def auth_settings_to_out(data: dict[str, Any], has_users: bool) -> AuthSettingsOut:
+    registration_mode = str(data.get("registrationMode") or DEFAULT_AUTH_SETTINGS["registrationMode"])
+    allow_registration = (not has_users) or registration_mode != "disabled"
+    invite_required = has_users and registration_mode == "invite_only"
+    return AuthSettingsOut(
+        registrationMode=registration_mode,
+        allowRegistration=allow_registration,
+        inviteCodeRequired=invite_required,
+        hasUsers=has_users,
+        updatedAt=data.get("updatedAt"),
+    )
+
+
+def row_to_invite_code_use(row: Any) -> InviteCodeUseOut:
+    return InviteCodeUseOut(
+        id=row["id"],
+        userId=row["user_id"],
+        username=row["username"] or "",
+        usedAt=row["used_at"],
+    )
+
+
+def row_to_invite_code(row: Any, recent_uses: list[InviteCodeUseOut] | None = None) -> InviteCodeOut:
+    max_uses = row["max_uses"]
+    used_count = int(row["used_count"] or 0)
+    remaining_uses = None if max_uses is None else max(0, int(max_uses) - used_count)
+    return InviteCodeOut(
+        id=row["id"],
+        code=row["code"],
+        note=row["note"] or "",
+        maxUses=max_uses,
+        usedCount=used_count,
+        remainingUses=remaining_uses,
+        isEnabled=bool(row["is_enabled"]),
+        expiresAt=row["expires_at"],
+        recentUses=recent_uses or [],
+        createdAt=row["created_at"],
+        updatedAt=row["updated_at"],
+    )
+
+
+def generate_registration_invite_code() -> str:
+    seed = re.sub(r"[^A-Z0-9]", "", new_id().upper())
+    if len(seed) < 12:
+        seed = f"{seed}{'X' * (12 - len(seed))}"
+    return f"INV-{seed[:4]}-{seed[4:8]}-{seed[8:12]}"
+
+
+def create_invite_code_record(
+    conn: Any,
+    *,
+    note: str,
+    max_uses: int | None,
+    expires_at: int | None,
+) -> Any:
+    ts = now_ms()
+    for _ in range(16):
+        invite_id = new_id()
+        code = generate_registration_invite_code()
+        try:
+            conn.execute(
+                """
+                INSERT INTO registration_invite_codes (
+                  id, code, note, max_uses, used_count, is_enabled, expires_at, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, 0, 1, ?, ?, ?)
+                """,
+                (invite_id, code, note, max_uses, expires_at, ts, ts),
+            )
+            return conn.execute("SELECT * FROM registration_invite_codes WHERE id = ?", (invite_id,)).fetchone()
+        except Exception as exc:
+            if "UNIQUE" not in str(exc).upper():
+                raise
+    raise HTTPException(status_code=500, detail="邀请码生成失败，请重试")
+
+
+def list_recent_invite_code_uses(conn: Any, invite_code_id: str, limit: int = 5) -> list[InviteCodeUseOut]:
+    rows = conn.execute(
+        """
+        SELECT * FROM registration_invite_code_uses
+        WHERE invite_code_id = ?
+        ORDER BY used_at DESC, id DESC
+        LIMIT ?
+        """,
+        (invite_code_id, limit),
+    ).fetchall()
+    return [row_to_invite_code_use(row) for row in rows]
+
+
+def get_invite_code_row_or_404(conn: Any, invite_id: str) -> Any:
+    row = conn.execute(
+        "SELECT * FROM registration_invite_codes WHERE id = ?",
+        (invite_id,),
+    ).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="邀请码不存在")
+    return row
+
+
+def consume_invite_code_or_400(conn: Any, invite_row: Any, ts: int) -> None:
+    invite_id = invite_row["id"]
+    if invite_row["max_uses"] is None:
+        result = conn.execute(
+            """
+            UPDATE registration_invite_codes
+            SET used_count = used_count + 1, updated_at = ?
+            WHERE id = ? AND is_enabled = 1 AND (expires_at IS NULL OR expires_at >= ?)
+            """,
+            (ts, invite_id, ts),
+        )
+    else:
+        result = conn.execute(
+            """
+            UPDATE registration_invite_codes
+            SET used_count = used_count + 1, updated_at = ?
+            WHERE id = ?
+              AND is_enabled = 1
+              AND (expires_at IS NULL OR expires_at >= ?)
+              AND used_count < max_uses
+            """,
+            (ts, invite_id, ts),
+        )
+    if result.rowcount:
+        return
+
+    latest = get_invite_code_row_or_404(conn, invite_id)
+    if not bool(latest["is_enabled"]):
+        raise HTTPException(status_code=400, detail="邀请码已停用")
+    if latest["expires_at"] is not None and int(latest["expires_at"]) < ts:
+        raise HTTPException(status_code=400, detail="邀请码已过期")
+    if latest["max_uses"] is not None and int(latest["used_count"] or 0) >= int(latest["max_uses"]):
+        raise HTTPException(status_code=400, detail="邀请码已用完")
+    raise HTTPException(status_code=400, detail="邀请码当前不可用，请稍后重试")
 
 
 def row_to_project(row: Any) -> ProjectBoardOut:
@@ -1228,7 +1461,7 @@ def clear_failed_auth(username: str) -> None:
 
 
 @app.post("/api/auth/register", response_model=UserOut)
-def register(payload: AuthIn, response: Response) -> UserOut:
+def register(payload: AuthRegisterIn, response: Response) -> UserOut:
     username = payload.username.strip()
     if not username:
         raise HTTPException(status_code=400, detail="Username is required")
@@ -1241,7 +1474,30 @@ def register(payload: AuthIn, response: Response) -> UserOut:
 
     try:
         with get_conn() as conn:
+            conn.execute("BEGIN IMMEDIATE")
             user_count = conn.execute("SELECT COUNT(*) AS count FROM users").fetchone()["count"]
+            auth_settings = get_auth_settings(conn)
+            registration_mode = str(auth_settings["registrationMode"])
+            invite_row = None
+            if user_count > 0:
+                if registration_mode == "disabled":
+                    raise HTTPException(status_code=403, detail="当前系统已关闭用户注册")
+                if registration_mode == "invite_only":
+                    invite_code = (payload.inviteCode or "").strip()
+                    if not invite_code:
+                        raise HTTPException(status_code=400, detail="当前注册需要邀请码")
+                    invite_row = conn.execute(
+                        "SELECT * FROM registration_invite_codes WHERE code = ?",
+                        (invite_code,),
+                    ).fetchone()
+                    if not invite_row:
+                        raise HTTPException(status_code=400, detail="邀请码无效")
+                    if not bool(invite_row["is_enabled"]):
+                        raise HTTPException(status_code=400, detail="邀请码已停用")
+                    if invite_row["expires_at"] is not None and int(invite_row["expires_at"]) < ts:
+                        raise HTTPException(status_code=400, detail="邀请码已过期")
+                    if invite_row["max_uses"] is not None and int(invite_row["used_count"] or 0) >= int(invite_row["max_uses"]):
+                        raise HTTPException(status_code=400, detail="邀请码已用完")
             role = "admin" if user_count == 0 else "user"
             conn.execute(
                 """
@@ -1254,8 +1510,20 @@ def register(payload: AuthIn, response: Response) -> UserOut:
                 "INSERT INTO sessions (id, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)",
                 (token, user_id, ts, expires_at),
             )
+            if invite_row is not None:
+                consume_invite_code_or_400(conn, invite_row, ts)
+                conn.execute(
+                    """
+                    INSERT INTO registration_invite_code_uses (
+                      id, invite_code_id, invite_code, user_id, username, used_at
+                    ) VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (new_id(), invite_row["id"], invite_row["code"], user_id, username, ts),
+                )
             row = conn.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
     except Exception as exc:
+        if isinstance(exc, HTTPException):
+            raise
         if "UNIQUE" in str(exc).upper():
             raise HTTPException(status_code=409, detail="Username already exists") from exc
         raise
@@ -1300,6 +1568,14 @@ def logout(request: Request, response: Response) -> dict[str, bool]:
 @app.get("/api/auth/me", response_model=UserOut)
 def me(user: UserOut = Depends(require_user)) -> UserOut:
     return user
+
+
+@app.get("/api/auth/settings", response_model=AuthSettingsOut)
+def get_public_auth_settings() -> AuthSettingsOut:
+    with get_conn() as conn:
+        user_count = int(conn.execute("SELECT COUNT(*) AS count FROM users").fetchone()["count"])
+        auth_settings = get_auth_settings(conn)
+    return auth_settings_to_out(auth_settings, user_count > 0)
 
 
 def normalize_channel_models(models: list[ChannelModel]) -> list[ChannelModel]:
@@ -1859,6 +2135,7 @@ def update_admin_user_role(
         raise HTTPException(status_code=400, detail="不能移除当前登录管理员自己的管理员权限")
 
     with get_conn() as conn:
+        conn.execute("BEGIN IMMEDIATE")
         target = conn.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
         if not target:
             raise HTTPException(status_code=404, detail="User not found")
@@ -1888,6 +2165,190 @@ def update_admin_user_role(
             },
         )
     return row_to_user(row)
+
+
+@app.get("/api/admin/auth/settings", response_model=AuthSettingsOut)
+def get_admin_auth_settings(admin: UserOut = Depends(require_admin)) -> AuthSettingsOut:
+    del admin
+    with get_conn() as conn:
+        user_count = int(conn.execute("SELECT COUNT(*) AS count FROM users").fetchone()["count"])
+        auth_settings = get_auth_settings(conn)
+    return auth_settings_to_out(auth_settings, user_count > 0)
+
+
+@app.patch("/api/admin/auth/settings", response_model=AuthSettingsOut)
+def patch_admin_auth_settings(
+    payload: AuthSettingsPatch,
+    admin: UserOut = Depends(require_admin),
+) -> AuthSettingsOut:
+    with get_conn() as conn:
+        current = get_auth_settings(conn)
+        next_mode = payload.registrationMode or current["registrationMode"]
+        saved = save_auth_settings(conn, next_mode)
+        user_count = int(conn.execute("SELECT COUNT(*) AS count FROM users").fetchone()["count"])
+        insert_audit_log(
+            conn,
+            admin,
+            "auth.settings_update",
+            "auth_settings",
+            "default",
+            {
+                "previousRegistrationMode": current["registrationMode"],
+                "nextRegistrationMode": next_mode,
+            },
+        )
+    return auth_settings_to_out(saved, user_count > 0)
+
+
+@app.get("/api/admin/auth/invite-codes", response_model=list[InviteCodeOut])
+def list_registration_invite_codes(admin: UserOut = Depends(require_admin)) -> list[InviteCodeOut]:
+    del admin
+    with get_conn() as conn:
+        rows = conn.execute(
+            "SELECT * FROM registration_invite_codes ORDER BY created_at DESC, id DESC"
+        ).fetchall()
+        return [row_to_invite_code(row, list_recent_invite_code_uses(conn, row["id"])) for row in rows]
+
+
+@app.get("/api/admin/auth/invite-codes/{invite_id}/uses", response_model=list[InviteCodeUseOut])
+def list_registration_invite_code_uses(
+    invite_id: str,
+    limit: int = Query(100, ge=1, le=500),
+    admin: UserOut = Depends(require_admin),
+) -> list[InviteCodeUseOut]:
+    del admin
+    with get_conn() as conn:
+        get_invite_code_row_or_404(conn, invite_id)
+        return list_recent_invite_code_uses(conn, invite_id, limit)
+
+
+@app.post("/api/admin/auth/invite-codes", response_model=InviteCodeOut)
+def create_registration_invite_code(
+    payload: InviteCodeIn,
+    admin: UserOut = Depends(require_admin),
+) -> InviteCodeOut:
+    note = payload.note.strip()
+    with get_conn() as conn:
+        row = create_invite_code_record(
+            conn,
+            note=note,
+            max_uses=payload.maxUses,
+            expires_at=payload.expiresAt,
+        )
+        insert_audit_log(
+            conn,
+            admin,
+            "auth.invite_code_create",
+            "registration_invite_code",
+            row["id"],
+            {
+                "note": note,
+                "maxUses": payload.maxUses,
+                "expiresAt": payload.expiresAt,
+            },
+        )
+        uses = list_recent_invite_code_uses(conn, row["id"])
+    return row_to_invite_code(row, uses)
+
+
+@app.post("/api/admin/auth/invite-codes/batch", response_model=list[InviteCodeOut])
+def batch_create_registration_invite_codes(
+    payload: InviteCodeBatchIn,
+    admin: UserOut = Depends(require_admin),
+) -> list[InviteCodeOut]:
+    note = payload.note.strip()
+    effective_max_uses = 1 if payload.maxUses is None else payload.maxUses
+    rows: list[Any] = []
+    with get_conn() as conn:
+        for _ in range(payload.count):
+            rows.append(
+                create_invite_code_record(
+                    conn,
+                    note=note,
+                    max_uses=effective_max_uses,
+                    expires_at=payload.expiresAt,
+                )
+            )
+        insert_audit_log(
+            conn,
+            admin,
+            "auth.invite_code_batch_create",
+            "registration_invite_code",
+            None,
+            {
+                "count": payload.count,
+                "note": note,
+                "maxUses": effective_max_uses,
+                "expiresAt": payload.expiresAt,
+            },
+        )
+        return [row_to_invite_code(row, list_recent_invite_code_uses(conn, row["id"])) for row in rows]
+
+
+@app.patch("/api/admin/auth/invite-codes/{invite_id}", response_model=InviteCodeOut)
+def patch_registration_invite_code(
+    invite_id: str,
+    payload: InviteCodePatch,
+    admin: UserOut = Depends(require_admin),
+) -> InviteCodeOut:
+    field_set = getattr(payload, "model_fields_set", set())
+    with get_conn() as conn:
+        current = get_invite_code_row_or_404(conn, invite_id)
+        note = payload.note.strip() if "note" in field_set and payload.note is not None else (current["note"] or "")
+        max_uses = payload.maxUses if "maxUses" in field_set else current["max_uses"]
+        expires_at = payload.expiresAt if "expiresAt" in field_set else current["expires_at"]
+        if "isEnabled" in field_set:
+            if payload.isEnabled is None:
+                raise HTTPException(status_code=400, detail="isEnabled 不能为空")
+            is_enabled = int(payload.isEnabled)
+        else:
+            is_enabled = int(bool(current["is_enabled"]))
+        if max_uses is not None and int(max_uses) < int(current["used_count"] or 0):
+            raise HTTPException(status_code=400, detail="最大使用次数不能小于当前已使用次数")
+        ts = now_ms()
+        conn.execute(
+            """
+            UPDATE registration_invite_codes
+            SET note = ?, max_uses = ?, expires_at = ?, is_enabled = ?, updated_at = ?
+            WHERE id = ?
+            """,
+            (note, max_uses, expires_at, is_enabled, ts, invite_id),
+        )
+        row = conn.execute("SELECT * FROM registration_invite_codes WHERE id = ?", (invite_id,)).fetchone()
+        insert_audit_log(
+            conn,
+            admin,
+            "auth.invite_code_update",
+            "registration_invite_code",
+            invite_id,
+            {
+                "note": note,
+                "maxUses": max_uses,
+                "expiresAt": expires_at,
+                "isEnabled": bool(is_enabled),
+            },
+        )
+        uses = list_recent_invite_code_uses(conn, row["id"])
+    return row_to_invite_code(row, uses)
+
+
+@app.delete("/api/admin/auth/invite-codes/{invite_id}")
+def delete_registration_invite_code(
+    invite_id: str,
+    admin: UserOut = Depends(require_admin),
+) -> dict[str, bool]:
+    with get_conn() as conn:
+        row = get_invite_code_row_or_404(conn, invite_id)
+        conn.execute("DELETE FROM registration_invite_codes WHERE id = ?", (invite_id,))
+        insert_audit_log(
+            conn,
+            admin,
+            "auth.invite_code_delete",
+            "registration_invite_code",
+            invite_id,
+            {"code": row["code"], "note": row["note"] or ""},
+        )
+    return {"ok": True}
 
 
 @app.get("/api/admin/system/export")
@@ -2422,6 +2883,187 @@ def normalize_open_prompt_item(source: OpenPromptSource, item: dict[str, str | l
     }
 
 
+IMAGE_PROMPT_POSITIVE_TERMS = (
+    "image",
+    "photo",
+    "photography",
+    "photorealistic",
+    "render",
+    "poster",
+    "portrait",
+    "product",
+    "scene",
+    "lighting",
+    "composition",
+    "background",
+    "illustration",
+    "cinematic",
+    "camera",
+    "lens",
+    "close-up",
+    "close up",
+    "editorial",
+    "studio",
+    "macro",
+    "texture",
+    "color grading",
+    "3d",
+    "cgi",
+    "character",
+    "mascot",
+    "anime",
+    "logo",
+    "brand",
+    "packaging",
+    "ad campaign",
+    "fashion",
+    "food",
+    "landscape",
+    "flat lay",
+    "depth of field",
+    "bokeh",
+    "海报",
+    "产品图",
+    "摄影",
+    "写实",
+    "插画",
+    "构图",
+    "灯光",
+    "场景",
+)
+
+IMAGE_PROMPT_NEGATIVE_TERMS = (
+    "install",
+    "installation",
+    "setup",
+    "configure",
+    "configuration",
+    "usage",
+    "getting started",
+    "quickstart",
+    "api",
+    "sdk",
+    "cli",
+    "workflow",
+    "agent",
+    "repository",
+    "codebase",
+    "docker",
+    "docker compose",
+    "pip install",
+    "npm install",
+    "pnpm install",
+    "yarn install",
+    "git clone",
+    "localhost",
+    "environment variable",
+    "token",
+    "compiler",
+    "benchmark",
+    "inference",
+    "transcript",
+    "ocr",
+    "audio",
+    "speech",
+    "video frame",
+    "markdown",
+    "fastapi",
+    "langgraph",
+    "typescript",
+    "python package",
+    "api key",
+    "安装",
+    "配置",
+    "接入",
+    "启动服务",
+    "部署",
+    "命令行",
+    "仓库",
+    "编译",
+    "推理",
+)
+
+IMAGE_PROMPT_TITLE_BLOCKLIST = re.compile(
+    r"\b("
+    r"install|installation|setup|usage|guide|quickstart|getting started|configuration|config|"
+    r"api|sdk|cli|integration|deployment|docker|requirements|benchmark|compiler|inference|"
+    r"architecture|changelog|release notes|faq|contributing|for humans|structured content|"
+    r"offline inference|one-line agent|agent setup|flagos|usage examples|python installation"
+    r")\b",
+    re.IGNORECASE,
+)
+
+IMAGE_PROMPT_HARD_REJECT_PATTERN = re.compile(
+    r"\b("
+    r"pip install|npm install|pnpm install|yarn install|git clone|docker compose|uv pip|"
+    r"python -m|export [A-Z_]+|set [A-Z_]+=|localhost:\d+|http://localhost|https://localhost|"
+    r"import [a-zA-Z_]|from [a-zA-Z0-9_.]+ import|def [a-zA-Z_]+\(|class [A-Z][A-Za-z0-9_]*|"
+    r"async def |cargo install|go install|cmake --build|make install"
+    r")\b",
+    re.IGNORECASE,
+)
+
+
+def count_term_hits(text: str, terms: tuple[str, ...]) -> int:
+    haystack = text.lower()
+    hits = 0
+    for term in terms:
+        if term in haystack:
+            hits += 1
+    return hits
+
+
+def looks_like_image_generation_prompt(
+    title: str,
+    prompt: str,
+    *,
+    image: str = "",
+    tags: list[str] | None = None,
+    category: str = "",
+    body: str = "",
+) -> bool:
+    normalized_title = title.strip().lower()
+    normalized_prompt = prompt.strip().lower()
+    if len(normalized_prompt) < 40:
+        return False
+    if len(normalized_prompt) > 4500:
+        return False
+
+    combined = " ".join(
+        [
+            normalized_title,
+            normalized_prompt,
+            category.strip().lower(),
+            " ".join((tags or [])).lower(),
+            body.strip().lower(),
+        ],
+    )
+    positive_hits = count_term_hits(combined, IMAGE_PROMPT_POSITIVE_TERMS)
+    negative_hits = count_term_hits(combined, IMAGE_PROMPT_NEGATIVE_TERMS)
+    has_visual_anchor = bool(image.strip()) or bool(category.strip()) or bool(tags)
+
+    if IMAGE_PROMPT_TITLE_BLOCKLIST.search(normalized_title):
+        return False
+    if IMAGE_PROMPT_HARD_REJECT_PATTERN.search(normalized_prompt[:1400]):
+        return False
+    if body and IMAGE_PROMPT_HARD_REJECT_PATTERN.search(body[:2200].lower()):
+        return False
+    if "<summary>" in normalized_prompt or "</details>" in normalized_prompt:
+        return False
+    bullet_like_lines = sum(
+        1
+        for line in prompt.splitlines()
+        if line.strip().startswith(("-", "*", "<details>", "<summary>", "`"))
+    )
+    if bullet_like_lines >= 3 and positive_hits < 4:
+        return False
+    if negative_hits >= 2 and positive_hits < 3:
+        return False
+    if has_visual_anchor and positive_hits >= 1 and negative_hits == 0:
+        return True
+    return positive_hits >= 3 and negative_hits == 0
+
+
 async def fetch_open_prompt_items(source: OpenPromptSource, limit: int) -> list[dict[str, Any]]:
     try:
         async with httpx.AsyncClient(timeout=30) as client:
@@ -2461,25 +3103,37 @@ def open_prompt_exists(conn: Any, prompt_source: OpenPromptSource, item: dict[st
     ).fetchone()
 
 
+def text_matches_any(text: str, patterns: tuple[str, ...]) -> bool:
+    lowered = text.lower()
+    for pattern in patterns:
+        if " " in pattern or "-" in pattern:
+            if pattern in lowered:
+                return True
+            continue
+        if re.search(rf"\b{re.escape(pattern)}\b", lowered):
+            return True
+    return False
+
+
 def infer_template_category(section: str, title: str) -> str:
     text = f"{section} {title}".lower()
-    if "e-commerce" in text or "product" in text:
+    if text_matches_any(text, ("e-commerce", "product")):
         return "product"
-    if "portrait" in text:
+    if text_matches_any(text, ("portrait",)):
         return "portrait"
-    if "character" in text:
+    if text_matches_any(text, ("character",)):
         return "character"
-    if "logo" in text or "brand" in text:
+    if text_matches_any(text, ("logo", "brand")):
         return "brand"
-    if "ui" in text:
+    if text_matches_any(text, ("ui",)):
         return "ui"
-    if "ad" in text or "poster" in text:
+    if text_matches_any(text, ("advertising", "poster", "campaign", "flyer", "banner")):
         return "poster"
-    if "anime" in text:
+    if text_matches_any(text, ("anime",)):
         return "anime"
-    if "food" in text:
+    if text_matches_any(text, ("food",)):
         return "food"
-    if "landscape" in text:
+    if text_matches_any(text, ("landscape",)):
         return "landscape"
     return "inspiration"
 
@@ -2653,12 +3307,37 @@ def extract_generic_prompt_text(body: str) -> str:
 
 def parse_generic_prompt_readme(source: OpenPromptSource, markdown: str) -> list[dict[str, str | list[str]]]:
     items: list[dict[str, str | list[str]]] = []
-    skip_titles = {"table of contents", "license", "installation", "usage", "intro", "introduction", "contributing"}
+    skip_titles = {
+        "table of contents",
+        "license",
+        "installation",
+        "usage",
+        "intro",
+        "introduction",
+        "contributing",
+        "getting started",
+        "quickstart",
+        "setup",
+        "configuration",
+        "faq",
+    }
     for title, body in iter_markdown_heading_sections(markdown):
         if not title or title.lower() in skip_titles:
             continue
         prompt = extract_generic_prompt_text(body)
         if not prompt:
+            continue
+        image = extract_prompt_image(source, body)
+        category = infer_template_category("gpt image", title)
+        tags = infer_template_tags("gpt image", title, prompt)
+        if not looks_like_image_generation_prompt(
+            title,
+            prompt,
+            image=image,
+            tags=tags,
+            category=category,
+            body=body,
+        ):
             continue
         links = markdown_links(body)
         source_url = next((url for _, url in links if url.startswith("http")), source.repo_url)
@@ -2667,11 +3346,11 @@ def parse_generic_prompt_readme(source: OpenPromptSource, markdown: str) -> list
             {
                 "title": title,
                 "prompt": prompt[:4000],
-                "image": extract_prompt_image(source, body),
+                "image": image,
                 "sourceUrl": source_url,
                 "sourceAuthor": source_author,
-                "category": infer_template_category("gpt image", title),
-                "tags": infer_template_tags("gpt image", title, prompt),
+                "category": category,
+                "tags": tags,
             }
         )
         if len(items) >= 300:

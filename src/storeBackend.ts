@@ -271,22 +271,17 @@ async function queuePreparedTask(
 
 function clearComposerAfterTaskQueued() {
   const state = useStore.getState()
-  if (state.composerClearMode !== 'keep_all') {
-    state.setPrompt('')
-  }
-  if (state.composerClearMode === 'prompt_and_images') {
-    state.clearInputImages()
-    state.clearMaskDraft()
-  }
+  state.setPrompt('')
   state.setGenerationPreflight(null)
   state.setPendingParentTaskId(null)
 }
 
 export async function submitTask(options: { allowFullMask?: boolean } = {}) {
   const prepared = await prepareTaskSubmission(options)
-  if (!prepared) return
-  await queuePreparedTask(prepared)
+  if (!prepared) return null
+  const task = await queuePreparedTask(prepared)
   clearComposerAfterTaskQueued()
+  return task
 }
 
 export async function submitTaskMatrix(
@@ -512,9 +507,9 @@ export async function loginBackend(username: string, password: string) {
   showToast('登录成功', 'success')
 }
 
-export async function registerBackend(username: string, password: string) {
+export async function registerBackend(username: string, password: string, inviteCode?: string) {
   const { settings, showToast } = useStore.getState()
-  const user = await backendApi.register(settings, username, password)
+  const user = await backendApi.register(settings, username, password, inviteCode)
   useStore.getState().setBackendUser(user)
   useStore.getState().setBackendUnavailableReason(null)
   await syncServerData()

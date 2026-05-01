@@ -46,7 +46,7 @@ export default function TemplateCard({ template }: Props) {
 
   useEffect(() => {
     let cancelled = false
-    setCoverSrc(template.externalCoverUrl || '')
+    setCoverSrc(template.externalCoverUrl || template.exampleImages[0] || '')
     if (!template.coverImageId) return
 
     const cached = getCachedImage(template.coverImageId)
@@ -62,7 +62,7 @@ export default function TemplateCard({ template }: Props) {
     return () => {
       cancelled = true
     }
-  }, [template.coverImageId, template.externalCoverUrl])
+  }, [template.coverImageId, template.exampleImages, template.externalCoverUrl])
 
   const handleDelete = () => {
     setConfirmDialog({

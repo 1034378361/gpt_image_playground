@@ -130,6 +130,8 @@ interface AppState {
   setGenerationPreflight: (preflight: GenerationPreflight | null) => void
   dismissedCodexCliPrompts: string[]
   dismissCodexCliPrompt: (key: string) => void
+  composerRevealTick: number
+  requestComposerReveal: () => void
 
   // 输入
   prompt: string
@@ -281,6 +283,8 @@ export const useStore = create<AppState>()(
           ? st.dismissedCodexCliPrompts
           : [...st.dismissedCodexCliPrompts, key],
       })),
+      composerRevealTick: 0,
+      requestComposerReveal: () => set((st) => ({ composerRevealTick: st.composerRevealTick + 1 })),
 
       // Input
       prompt: '',
@@ -621,7 +625,7 @@ export function applyTemplate(template: PromptTemplate) {
 }
 
 export function applyTemplateWithVariables(template: PromptTemplate, values: Record<string, string>) {
-  const { settings, templates, currentProjectId, setTemplates, setPrompt, setParams, setSettings, setActiveTemplateId, setCurrentView, setSelectedTemplateId, setTemplateVariableTemplateId, setCurrentProjectId, showToast } =
+  const { settings, templates, currentProjectId, setTemplates, setPrompt, setParams, setSettings, setActiveTemplateId, setCurrentView, setSelectedTemplateId, setTemplateVariableTemplateId, setCurrentProjectId, requestComposerReveal, showToast } =
     useStore.getState()
   const channelId = template.recommendedChannelId || template.channelId || ''
   const apiMode = template.recommendedApiMode || template.apiMode
@@ -644,6 +648,7 @@ export function applyTemplateWithVariables(template: PromptTemplate, values: Rec
   setSelectedTemplateId(null)
   setTemplateVariableTemplateId(null)
   setCurrentProjectId(nextProjectId)
+  requestComposerReveal()
   void backendApi.markTemplateUsed(settings, template.id)
     .then((updated) => setTemplates(templates.map((item) => (item.id === template.id ? updated : item))))
     .catch(() => undefined)

@@ -123,7 +123,9 @@ export default function TemplateDetailModal() {
   const canSubmit = Boolean(isOwner && !isAdmin && template.visibility !== 'public' && template.submissionStatus !== 'submitted' && template.submissionStatus !== 'approved')
   const canReview = Boolean(isAdmin && template.submissionStatus === 'submitted')
 
-  const coverSrc = template.coverImageId ? imageSrcs[template.coverImageId] || template.externalCoverUrl || '' : template.externalCoverUrl || ''
+  const coverSrc = template.coverImageId
+    ? imageSrcs[template.coverImageId] || template.externalCoverUrl || template.exampleImages[0] || ''
+    : template.externalCoverUrl || template.exampleImages[0] || ''
   const exampleImages = [...new Set([coverSrc, ...(template.exampleImages ?? [])].filter(Boolean))]
   const useCount = Math.max(template.usageCount ?? 0, linkedTasks.length)
 

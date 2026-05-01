@@ -4,6 +4,7 @@ import type {
   ApiChannel,
   ApiChannelDraft,
   AppSettings,
+  AuthSettings,
   AutoImportRun,
   AutoImportSettings,
   AutoImportSettingsPatch,
@@ -11,6 +12,7 @@ import type {
   BackendUser,
   ChannelLeaderboardItem,
   GenerationQueueStats,
+  InviteCode,
   OpenPromptDiscovery,
   OpenPromptSourceStatus,
   OpenPromptPreview,
@@ -25,6 +27,7 @@ import type {
   TaskRecord,
   TemplateSample,
   TemplateVersion,
+  RegistrationMode,
 } from '../types'
 
 export type OpenPromptLibrarySourceId = 'evolink' | 'zerolu' | 'imgedify'
@@ -105,6 +108,10 @@ export function getMe(settings: AppSettings): Promise<BackendUser> {
   return request(settings, '/auth/me')
 }
 
+export function getAuthSettings(settings: AppSettings): Promise<AuthSettings> {
+  return request(settings, '/auth/settings')
+}
+
 export function login(settings: AppSettings, username: string, password: string): Promise<BackendUser> {
   return request(settings, '/auth/login', {
     method: 'POST',
@@ -112,10 +119,15 @@ export function login(settings: AppSettings, username: string, password: string)
   })
 }
 
-export function register(settings: AppSettings, username: string, password: string): Promise<BackendUser> {
+export function register(
+  settings: AppSettings,
+  username: string,
+  password: string,
+  inviteCode?: string,
+): Promise<BackendUser> {
   return request(settings, '/auth/register', {
     method: 'POST',
-    body: JSON.stringify({ username, password }),
+    body: JSON.stringify({ username, password, inviteCode: inviteCode?.trim() || undefined }),
   })
 }
 
@@ -208,6 +220,63 @@ export function patchAdminUserRole(
     method: 'PATCH',
     body: JSON.stringify({ role }),
   })
+}
+
+export function getAdminAuthSettings(settings: AppSettings): Promise<AuthSettings> {
+  return request(settings, '/admin/auth/settings')
+}
+
+export function patchAdminAuthSettings(
+  settings: AppSettings,
+  registrationMode: RegistrationMode,
+): Promise<AuthSettings> {
+  return request(settings, '/admin/auth/settings', {
+    method: 'PATCH',
+    body: JSON.stringify({ registrationMode }),
+  })
+}
+
+export function listInviteCodes(settings: AppSettings): Promise<InviteCode[]> {
+  return request(settings, '/admin/auth/invite-codes')
+}
+
+export function listInviteCodeUses(settings: AppSettings, inviteId: string, limit = 100): Promise<InviteCode['recentUses']> {
+  return request(settings, `/admin/auth/invite-codes/${encodeURIComponent(inviteId)}/uses?limit=${encodeURIComponent(String(limit))}`)
+}
+
+export function createInviteCode(
+  settings: AppSettings,
+  payload: { note?: string; maxUses?: number | null; expiresAt?: number | null },
+): Promise<InviteCode> {
+  return request(settings, '/admin/auth/invite-codes', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
+export function createInviteCodesBatch(
+  settings: AppSettings,
+  payload: { count: number; note?: string; maxUses?: number | null; expiresAt?: number | null },
+): Promise<InviteCode[]> {
+  return request(settings, '/admin/auth/invite-codes/batch', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
+export function patchInviteCode(
+  settings: AppSettings,
+  inviteId: string,
+  payload: { note?: string; maxUses?: number | null; expiresAt?: number | null; isEnabled?: boolean },
+): Promise<InviteCode> {
+  return request(settings, `/admin/auth/invite-codes/${encodeURIComponent(inviteId)}`, {
+    method: 'PATCH',
+    body: JSON.stringify(payload),
+  })
+}
+
+export function deleteInviteCode(settings: AppSettings, inviteId: string): Promise<{ ok: boolean }> {
+  return request(settings, `/admin/auth/invite-codes/${encodeURIComponent(inviteId)}`, { method: 'DELETE' })
 }
 
 export async function exportSystemBackup(settings: AppSettings): Promise<Blob> {

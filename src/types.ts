@@ -27,6 +27,35 @@ export interface BackendUser {
   updatedAt: number
 }
 
+export type RegistrationMode = 'disabled' | 'open' | 'invite_only'
+
+export interface AuthSettings {
+  registrationMode: RegistrationMode
+  allowRegistration: boolean
+  inviteCodeRequired: boolean
+  hasUsers: boolean
+  updatedAt?: number | null
+}
+
+export interface InviteCode {
+  id: string
+  code: string
+  note: string
+  maxUses?: number | null
+  usedCount: number
+  remainingUses?: number | null
+  isEnabled: boolean
+  expiresAt?: number | null
+  recentUses: Array<{
+    id: string
+    userId?: string | null
+    username: string
+    usedAt: number
+  }>
+  createdAt: number
+  updatedAt: number
+}
+
 export interface AdminUser {
   id: string
   username: string

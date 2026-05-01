@@ -39,8 +39,6 @@ function useIsMobile() {
 export default function InputBar() {
   const prompt = useStore((s) => s.prompt)
   const setPrompt = useStore((s) => s.setPrompt)
-  const composerClearMode = useStore((s) => s.composerClearMode)
-  const setComposerClearMode = useStore((s) => s.setComposerClearMode)
   const inputImages = useStore((s) => s.inputImages)
   const removeInputImage = useStore((s) => s.removeInputImage)
   const clearInputImages = useStore((s) => s.clearInputImages)
@@ -53,6 +51,7 @@ export default function InputBar() {
   const currentProjectId = useStore((s) => s.currentProjectId)
   const pendingParentTaskId = useStore((s) => s.pendingParentTaskId)
   const generationPreflight = useStore((s) => s.generationPreflight)
+  const composerRevealTick = useStore((s) => s.composerRevealTick)
   const setShowSettings = useStore((s) => s.setShowSettings)
   const setLightboxImageId = useStore((s) => s.setLightboxImageId)
   const setConfirmDialog = useStore((s) => s.setConfirmDialog)
@@ -142,12 +141,12 @@ export default function InputBar() {
   }, [prompt, setTemplateEditor, showToast])
 
   const maskDraft = useStore((s) => s.maskDraft)
-  const clearMaskDraft = useStore((s) => s.clearMaskDraft)
   const setMaskEditorImageId = useStore((s) => s.setMaskEditorImageId)
 
   const fileInputRef = useRef<HTMLInputElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const cardRef = useRef<HTMLDivElement>(null)
+  const dockStackRef = useRef<HTMLDivElement>(null)
   const imagesRef = useRef<HTMLDivElement>(null)
   const prevHeightRef = useRef(42)
 
@@ -159,6 +158,9 @@ export default function InputBar() {
   const [qualityHintVisible, setQualityHintVisible] = useState(false)
   const [optimizingPrompt, setOptimizingPrompt] = useState(false)
   const [mobileCollapsed, setMobileCollapsed] = useState(false)
+  const [desktopHovered, setDesktopHovered] = useState(false)
+  const [desktopFocused, setDesktopFocused] = useState(false)
+  const [desktopDockHeight, setDesktopDockHeight] = useState(0)
   const [showSizePicker, setShowSizePicker] = useState(false)
   const [showExperimentLab, setShowExperimentLab] = useState(false)
   const [maskPreviewUrl, setMaskPreviewUrl] = useState('')
@@ -173,6 +175,10 @@ export default function InputBar() {
   const [nInput, setNInput] = useState(String(params.n))
   const dragCounter = useRef(0)
   const isMobile = useIsMobile()
+  const desktopExpanded = isMobile || isDragging || desktopHovered || desktopFocused
+  const desktopCollapsedOffset = isMobile
+    ? 0
+    : Math.max(0, desktopDockHeight)
 
   const handleOptimizePrompt = useCallback(() => {
     setOptimizingPrompt(true)
@@ -402,10 +408,23 @@ export default function InputBar() {
     e.target.value = ''
   }
 
+  const handleSubmitFromComposer = useCallback(async () => {
+    if (!hasGenerationConfig) {
+      handleMissingGenerationConfig()
+      return
+    }
+    const queuedTask = await submitTask()
+    if (!queuedTask) return
+    textareaRef.current?.blur()
+    setDesktopFocused(false)
+    setDesktopHovered(false)
+    setMobileCollapsed(true)
+  }, [handleMissingGenerationConfig, hasGenerationConfig])
+
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
       e.preventDefault()
-      submitTask()
+      void handleSubmitFromComposer()
     }
   }
 
@@ -525,6 +544,49 @@ export default function InputBar() {
     return () => window.removeEventListener('resize', adjustTextareaHeight)
   }, [adjustTextareaHeight])
 
+  useEffect(() => {
+    if (isMobile) {
+      setDesktopHovered(false)
+      setDesktopFocused(false)
+      setDesktopDockHeight(0)
+      return
+    }
+
+    const stack = dockStackRef.current
+    if (!stack) return
+
+    const updateHeight = () => {
+      setDesktopDockHeight(stack.getBoundingClientRect().height)
+    }
+
+    updateHeight()
+
+    if (typeof ResizeObserver === 'undefined') {
+      window.addEventListener('resize', updateHeight)
+      return () => window.removeEventListener('resize', updateHeight)
+    }
+
+    const observer = new ResizeObserver(() => updateHeight())
+    observer.observe(stack)
+    window.addEventListener('resize', updateHeight)
+    return () => {
+      observer.disconnect()
+      window.removeEventListener('resize', updateHeight)
+    }
+  }, [isMobile])
+
+  useEffect(() => {
+    if (composerRevealTick === 0) return
+    setMobileCollapsed(false)
+    setDesktopHovered(true)
+    setDesktopFocused(true)
+    window.requestAnimationFrame(() => {
+      textareaRef.current?.focus()
+      const end = textareaRef.current?.value.length ?? 0
+      textareaRef.current?.setSelectionRange(end, end)
+    })
+  }, [composerRevealTick])
+
   // 移动端拖动条手势
   useEffect(() => {
     const el = handleRef.current
@@ -552,6 +614,16 @@ export default function InputBar() {
       el.removeEventListener('touchend', onTouchEnd)
     }
   }, [])
+
+  const handleDesktopBlurCapture = useCallback(() => {
+    if (isMobile) return
+    window.requestAnimationFrame(() => {
+      const dock = dockStackRef.current
+      if (!dock?.contains(document.activeElement)) {
+        setDesktopFocused(false)
+      }
+    })
+  }, [isMobile])
 
   const selectClass = 'px-3 py-1.5 rounded-xl border border-gray-200/60 dark:border-white/[0.08] bg-white/50 dark:bg-white/[0.03] hover:bg-white dark:hover:bg-white/[0.06] text-xs transition-all duration-200 shadow-sm'
 
@@ -641,173 +713,207 @@ export default function InputBar() {
     )
   }
 
-  const renderParams = (cols: string) => (
-    <div className={`grid ${cols} gap-2 text-xs flex-1`}>
-      <label className="flex flex-col gap-0.5">
-        <span className="text-gray-400 dark:text-gray-500 ml-1">渠道</span>
-        <Select
-          value={settings.channelId || '__none__'}
-          onChange={(value) => {
-            if (value === '__none__') {
-              handleMissingGenerationConfig()
-              return
-            }
-            selectChannelModel(String(value))
-          }}
-          options={
-            channels.length
-              ? channels.map((channel) => ({
-                  label: `${channel.name} · ${healthStatusLabel(channel.healthStatus)} · ${compatibilityStatusLabel(channel.compatibilityStatus)}`,
-                  value: channel.id,
-                }))
-              : [{ label: missingChannelMessage, value: '__none__' }]
+  const labelClass = 'text-gray-400 dark:text-gray-500 ml-1'
+
+  const renderChannelField = () => (
+    <label className="flex flex-col gap-0.5">
+      <span className={labelClass}>渠道</span>
+      <Select
+        value={settings.channelId || '__none__'}
+        onChange={(value) => {
+          if (value === '__none__') {
+            handleMissingGenerationConfig()
+            return
           }
-          className={selectClass}
-        />
-      </label>
-      <label className="flex flex-col gap-0.5">
-        <span className="text-gray-400 dark:text-gray-500 ml-1">模型</span>
-        <Select
-          value={settings.model || '__none__'}
-          onChange={(value) => {
-            if (!settings.channelId || value === '__none__') return
-            selectChannelModel(settings.channelId, String(value))
-          }}
-          options={
-            enabledModels.length
-              ? enabledModels.map((model) => ({ label: model.label || model.id, value: model.id }))
-              : [{ label: currentChannel ? '当前渠道暂无可用模型' : '请先选择渠道', value: '__none__' }]
-          }
-          className={selectClass}
-          disabled={!currentChannel || !enabledModels.length}
-        />
-      </label>
-      <label className="flex flex-col gap-0.5">
-        <span className="text-gray-400 dark:text-gray-500 ml-1">尺寸</span>
-        <button
-          type="button"
-          onClick={() => setShowSizePicker(true)}
-          className="px-3 py-1.5 rounded-xl border border-gray-200/60 dark:border-white/[0.08] bg-white/50 dark:bg-white/[0.03] hover:bg-white dark:hover:bg-white/[0.06] focus:outline-none text-xs text-left transition-all duration-200 shadow-sm font-mono"
-          title="选择尺寸"
-        >
-          {normalizeImageSize(params.size) || DEFAULT_PARAMS.size}
-        </button>
-      </label>
-      <label
-        className="relative flex flex-col gap-0.5"
-        onMouseEnter={showQualityHint}
-        onMouseLeave={hideQualityHint}
-        onTouchStart={startQualityHintTouch}
-        onTouchEnd={clearQualityHintTimer}
-        onTouchCancel={hideQualityHint}
-        onClick={showQualityHint}
+          selectChannelModel(String(value))
+        }}
+        options={
+          channels.length
+            ? channels.map((channel) => ({
+                label: `${channel.name} · ${healthStatusLabel(channel.healthStatus)} · ${compatibilityStatusLabel(channel.compatibilityStatus)}`,
+                value: channel.id,
+              }))
+            : [{ label: missingChannelMessage, value: '__none__' }]
+        }
+        className={selectClass}
+      />
+    </label>
+  )
+
+  const renderModelField = () => (
+    <label className="flex flex-col gap-0.5">
+      <span className={labelClass}>模型</span>
+      <Select
+        value={settings.model || '__none__'}
+        onChange={(value) => {
+          if (!settings.channelId || value === '__none__') return
+          selectChannelModel(settings.channelId, String(value))
+        }}
+        options={
+          enabledModels.length
+            ? enabledModels.map((model) => ({ label: model.label || model.id, value: model.id }))
+            : [{ label: currentChannel ? '当前渠道暂无可用模型' : '请先选择渠道', value: '__none__' }]
+        }
+        className={selectClass}
+        disabled={!currentChannel || !enabledModels.length}
+      />
+    </label>
+  )
+
+  const renderSizeField = () => (
+    <label className="flex flex-col gap-0.5">
+      <span className={labelClass}>尺寸</span>
+      <button
+        type="button"
+        onClick={() => setShowSizePicker(true)}
+        className="px-3 py-1.5 rounded-xl border border-gray-200/60 dark:border-white/[0.08] bg-white/50 dark:bg-white/[0.03] hover:bg-white dark:hover:bg-white/[0.06] focus:outline-none text-xs text-left transition-all duration-200 shadow-sm font-mono"
+        title="选择尺寸"
       >
-        <span className="text-gray-400 dark:text-gray-500 ml-1">质量</span>
-        <Select
-          value={settings.codexCli ? 'auto' : params.quality}
-          onChange={(val) => {
-            if (!settings.codexCli) setParams({ quality: val as any })
-          }}
-          options={[
-            { label: 'auto', value: 'auto' },
-            { label: 'low', value: 'low' },
-            { label: 'medium', value: 'medium' },
-            { label: 'high', value: 'high' },
-          ]}
-          disabled={settings.codexCli}
-          className={settings.codexCli
-            ? 'px-3 py-1.5 rounded-xl border border-gray-200/60 dark:border-white/[0.08] bg-gray-100/50 dark:bg-white/[0.05] opacity-50 cursor-not-allowed text-xs transition-all duration-200 shadow-sm'
-            : selectClass}
-        />
-        <ButtonTooltip
-          visible={settings.codexCli && qualityHintVisible}
-          text="Codex CLI 不支持质量参数"
-        />
-      </label>
-      <label className="flex flex-col gap-0.5">
-        <span className="text-gray-400 dark:text-gray-500 ml-1">格式</span>
-        <Select
-          value={params.output_format}
-          onChange={(val) => setParams({ output_format: val as any })}
-          options={[
-            { label: 'PNG', value: 'png' },
-            { label: 'JPEG', value: 'jpeg' },
-            { label: 'WebP', value: 'webp' },
-          ]}
-          className={selectClass}
-        />
-      </label>
-      <label
-        className="relative flex flex-col gap-0.5"
-        onMouseEnter={showCompressionHint}
-        onMouseLeave={hideCompressionHint}
-        onTouchStart={startCompressionHintTouch}
-        onTouchEnd={clearCompressionHintTimer}
-        onTouchCancel={hideCompressionHint}
-        onClick={showCompressionHint}
-      >
-        <span className="text-gray-400 dark:text-gray-500 ml-1">压缩率</span>
-        <input
-          value={outputCompressionInput}
-          onChange={(e) => setOutputCompressionInput(e.target.value)}
-          onBlur={commitOutputCompression}
-          disabled={params.output_format === 'png'}
-          type="number"
-          min={0}
-          max={100}
-          placeholder="0-100"
-          className={`px-3 py-1.5 rounded-xl border border-gray-200/60 dark:border-white/[0.08] focus:outline-none text-xs transition-all duration-200 shadow-sm ${
-            params.output_format === 'png'
-              ? 'bg-gray-100/50 dark:bg-white/[0.05] opacity-50 cursor-not-allowed'
-              : 'bg-white/50 dark:bg-white/[0.03]'
-            }`}
-        />
-        <ButtonTooltip
-          visible={compressionHintVisible}
-          text="仅 JPEG 和 WebP 支持压缩率"
-        />
-      </label>
-      <label
-        className="relative flex flex-col gap-0.5"
-        onMouseEnter={showModerationHint}
-        onMouseLeave={hideModerationHint}
-        onTouchStart={startModerationHintTouch}
-        onTouchEnd={clearModerationHintTimer}
-        onTouchCancel={hideModerationHint}
-        onClick={showModerationHint}
-      >
-        <span className="text-gray-400 dark:text-gray-500 ml-1">审核</span>
-        <Select
-          value={settings.apiMode === 'responses' ? 'auto' : params.moderation}
-          onChange={(val) => {
-            if (settings.apiMode !== 'responses') setParams({ moderation: val as any })
-          }}
-          options={[
-            { label: 'auto', value: 'auto' },
-            { label: 'low', value: 'low' },
-          ]}
-          disabled={settings.apiMode === 'responses'}
-          className={settings.apiMode === 'responses'
-            ? 'px-3 py-1.5 rounded-xl border border-gray-200/60 dark:border-white/[0.08] bg-gray-100/50 dark:bg-white/[0.05] opacity-50 cursor-not-allowed text-xs transition-all duration-200 shadow-sm'
-            : selectClass}
-        />
-        <ButtonTooltip
-          visible={settings.apiMode === 'responses' && moderationHintVisible}
-          text="Responses API 不支持审核参数"
-        />
-      </label>
-      <label className="flex flex-col gap-0.5">
-        <span className="text-gray-400 dark:text-gray-500 ml-1">数量</span>
-        <input
-          value={nInput}
-          onChange={(e) => setNInput(e.target.value)}
-          onBlur={commitN}
-          type="number"
-          min={1}
-          max={4}
-          className="px-3 py-1.5 rounded-xl border border-gray-200/60 dark:border-white/[0.08] bg-white/50 dark:bg-white/[0.03] focus:outline-none text-xs transition-all duration-200 shadow-sm"
-        />
-      </label>
+        {normalizeImageSize(params.size) || DEFAULT_PARAMS.size}
+      </button>
+    </label>
+  )
+
+  const renderQualityField = () => (
+    <label
+      className="relative flex flex-col gap-0.5"
+      onMouseEnter={showQualityHint}
+      onMouseLeave={hideQualityHint}
+      onTouchStart={startQualityHintTouch}
+      onTouchEnd={clearQualityHintTimer}
+      onTouchCancel={hideQualityHint}
+      onClick={showQualityHint}
+    >
+      <span className={labelClass}>质量</span>
+      <Select
+        value={settings.codexCli ? 'auto' : params.quality}
+        onChange={(val) => {
+          if (!settings.codexCli) setParams({ quality: val as any })
+        }}
+        options={[
+          { label: 'auto', value: 'auto' },
+          { label: 'low', value: 'low' },
+          { label: 'medium', value: 'medium' },
+          { label: 'high', value: 'high' },
+        ]}
+        disabled={settings.codexCli}
+        className={settings.codexCli
+          ? 'px-3 py-1.5 rounded-xl border border-gray-200/60 dark:border-white/[0.08] bg-gray-100/50 dark:bg-white/[0.05] opacity-50 cursor-not-allowed text-xs transition-all duration-200 shadow-sm'
+          : selectClass}
+      />
+      <ButtonTooltip
+        visible={settings.codexCli && qualityHintVisible}
+        text="Codex CLI 不支持质量参数"
+      />
+    </label>
+  )
+
+  const renderFormatField = () => (
+    <label className="flex flex-col gap-0.5">
+      <span className={labelClass}>格式</span>
+      <Select
+        value={params.output_format}
+        onChange={(val) => setParams({ output_format: val as any })}
+        options={[
+          { label: 'PNG', value: 'png' },
+          { label: 'JPEG', value: 'jpeg' },
+          { label: 'WebP', value: 'webp' },
+        ]}
+        className={selectClass}
+      />
+    </label>
+  )
+
+  const renderCompressionField = () => (
+    <label
+      className="relative flex flex-col gap-0.5"
+      onMouseEnter={showCompressionHint}
+      onMouseLeave={hideCompressionHint}
+      onTouchStart={startCompressionHintTouch}
+      onTouchEnd={clearCompressionHintTimer}
+      onTouchCancel={hideCompressionHint}
+      onClick={showCompressionHint}
+    >
+      <span className={labelClass}>压缩率</span>
+      <input
+        value={outputCompressionInput}
+        onChange={(e) => setOutputCompressionInput(e.target.value)}
+        onBlur={commitOutputCompression}
+        disabled={params.output_format === 'png'}
+        type="number"
+        min={0}
+        max={100}
+        placeholder="0-100"
+        className={`px-3 py-1.5 rounded-xl border border-gray-200/60 dark:border-white/[0.08] focus:outline-none text-xs transition-all duration-200 shadow-sm ${
+          params.output_format === 'png'
+            ? 'bg-gray-100/50 dark:bg-white/[0.05] opacity-50 cursor-not-allowed'
+            : 'bg-white/50 dark:bg-white/[0.03]'
+          }`}
+      />
+      <ButtonTooltip
+        visible={compressionHintVisible}
+        text="仅 JPEG 和 WebP 支持压缩率"
+      />
+    </label>
+  )
+
+  const renderModerationField = () => (
+    <label
+      className="relative flex flex-col gap-0.5"
+      onMouseEnter={showModerationHint}
+      onMouseLeave={hideModerationHint}
+      onTouchStart={startModerationHintTouch}
+      onTouchEnd={clearModerationHintTimer}
+      onTouchCancel={hideModerationHint}
+      onClick={showModerationHint}
+    >
+      <span className={labelClass}>审核</span>
+      <Select
+        value={settings.apiMode === 'responses' ? 'auto' : params.moderation}
+        onChange={(val) => {
+          if (settings.apiMode !== 'responses') setParams({ moderation: val as any })
+        }}
+        options={[
+          { label: 'auto', value: 'auto' },
+          { label: 'low', value: 'low' },
+        ]}
+        disabled={settings.apiMode === 'responses'}
+        className={settings.apiMode === 'responses'
+          ? 'px-3 py-1.5 rounded-xl border border-gray-200/60 dark:border-white/[0.08] bg-gray-100/50 dark:bg-white/[0.05] opacity-50 cursor-not-allowed text-xs transition-all duration-200 shadow-sm'
+          : selectClass}
+      />
+      <ButtonTooltip
+        visible={settings.apiMode === 'responses' && moderationHintVisible}
+        text="Responses API 不支持审核参数"
+      />
+    </label>
+  )
+
+  const renderCountField = () => (
+    <label className="flex flex-col gap-0.5">
+      <span className={labelClass}>数量</span>
+      <input
+        value={nInput}
+        onChange={(e) => setNInput(e.target.value)}
+        onBlur={commitN}
+        type="number"
+        min={1}
+        max={4}
+        className="px-3 py-1.5 rounded-xl border border-gray-200/60 dark:border-white/[0.08] bg-white/50 dark:bg-white/[0.03] focus:outline-none text-xs transition-all duration-200 shadow-sm"
+      />
+    </label>
+  )
+
+  const renderMobileParams = () => (
+    <div className="grid grid-cols-2 gap-2 text-xs flex-1">
+      {renderChannelField()}
+      {renderModelField()}
+      {renderSizeField()}
+      {renderQualityField()}
+      {renderFormatField()}
+      {renderCompressionField()}
+      {renderModerationField()}
+      {renderCountField()}
     </div>
   )
 
@@ -856,66 +962,101 @@ export default function InputBar() {
       )}
       <ExperimentLabModal open={showExperimentLab} onClose={() => setShowExperimentLab(false)} />
 
-      <div data-input-bar className="fixed bottom-4 sm:bottom-6 left-1/2 -translate-x-1/2 z-30 w-full max-w-4xl px-3 sm:px-4 transition-all duration-300">
-        {selectedTaskIds.length > 0 && (
-          <div className="flex justify-center mb-3">
-            <div className="bg-gray-800/90 dark:bg-gray-800/90 backdrop-blur shadow-lg rounded-full flex items-center p-1 border border-white/10 pointer-events-auto">
-              <button
-                onClick={clearSelection}
-                className="p-2 text-gray-300 hover:text-white transition-colors"
-                title="取消选择"
-              >
-                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                </svg>
-              </button>
-              <div className="w-px h-5 bg-white/20 mx-1"></div>
-              <button
-                onClick={handleSelectAllToggle}
-                className="p-2 text-blue-400 hover:text-blue-300 transition-colors"
-                title={selectedTaskIds.length === filteredTasks.length && filteredTasks.length > 0 ? "取消全选" : "全选当前可见"}
-              >
-                {selectedTaskIds.length === filteredTasks.length && filteredTasks.length > 0 ? (
-                  <svg className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" viewBox="0 0 24 24">
-                    <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
-                    <path d="M9 12l2 2 4-4" />
-                  </svg>
-                ) : (
-                  <svg className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" viewBox="0 0 24 24">
-                    <path strokeDasharray="4 4" d="M19 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V5a2 2 0 0 0-2-2z" />
-                  </svg>
-                )}
-              </button>
-              <div className="w-px h-5 bg-white/20 mx-1"></div>
-              <button
-                onClick={handleToggleFavorite}
-                className="p-2 text-yellow-400 hover:text-yellow-300 transition-colors"
-                title="收藏/取消收藏"
-              >
-                {selectedTaskIds.length > 0 && selectedTaskIds.every((id) => tasks.find((t) => t.id === id)?.isFavorite) ? (
-                  <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
-                    <path d="M11.049 2.927c.3-.921 1.603-.921 1.902 0l1.519 4.674a1 1 0 00.95.69h4.915c.969 0 1.371 1.24.588 1.81l-3.976 2.888a1 1 0 00-.363 1.118l1.518 4.674c.3.922-.755 1.688-1.538 1.118l-3.976-2.888a1 1 0 00-1.176 0l-3.976 2.888c-.783.57-1.838-.197-1.538-1.118l1.518-4.674a1 1 0 00-.363-1.118l-3.976-2.888c-.784-.57-.38-1.81.588-1.81h4.914a1 1 0 00.951-.69l1.519-4.674z" />
-                  </svg>
-                ) : (
-                  <svg className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" viewBox="0 0 24 24">
-                    <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
-                  </svg>
-                )}
-              </button>
-              <div className="w-px h-5 bg-white/20 mx-1"></div>
-              <button
-                onClick={handleDeleteSelected}
-                className="p-2 text-red-400 hover:text-red-300 transition-colors"
-                title="删除选中"
-              >
-                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                </svg>
-              </button>
-            </div>
-          </div>
-        )}
-        <div ref={cardRef} className="bg-white/70 dark:bg-gray-900/70 backdrop-blur-2xl border border-white/50 dark:border-white/[0.08] shadow-[0_8px_30px_rgb(0,0,0,0.08)] dark:shadow-[0_8px_30px_rgb(0,0,0,0.3)] rounded-2xl sm:rounded-3xl p-3 sm:p-4 ring-1 ring-black/5 dark:ring-white/10">
+      <div
+        data-input-bar
+        className="pointer-events-none fixed bottom-4 sm:bottom-0 left-1/2 -translate-x-1/2 z-30 w-full max-w-4xl px-3 sm:px-4 transition-all duration-300"
+      >
+        <div className="relative sm:pb-4">
+          {!isMobile && (
+            <button
+              type="button"
+              onFocus={() => setDesktopFocused(true)}
+              onMouseEnter={() => setDesktopHovered(true)}
+              onMouseLeave={() => setDesktopHovered(false)}
+              className={`pointer-events-auto absolute bottom-2 left-1/2 z-10 hidden -translate-x-1/2 items-center gap-2 rounded-full border border-white/50 bg-white/88 px-3 py-1.5 text-xs text-gray-600 shadow-lg shadow-black/10 backdrop-blur dark:border-white/[0.08] dark:bg-gray-900/88 dark:text-gray-300 sm:flex transition-all duration-300 ${
+                desktopExpanded ? 'pointer-events-none translate-y-2 opacity-0' : 'translate-y-0 opacity-100'
+              }`}
+              aria-label="展开提示词输入区"
+            >
+              <span className="inline-block h-1.5 w-10 rounded-full bg-gray-300 dark:bg-white/[0.14]" />
+              <span>提示词输入区</span>
+            </button>
+          )}
+
+          <div
+            ref={dockStackRef}
+            className="pointer-events-auto transition-transform duration-300 ease-out will-change-transform"
+            onMouseEnter={() => !isMobile && setDesktopHovered(true)}
+            onMouseLeave={() => !isMobile && setDesktopHovered(false)}
+            onFocusCapture={() => !isMobile && setDesktopFocused(true)}
+            onBlurCapture={handleDesktopBlurCapture}
+            style={
+              isMobile
+                ? undefined
+                : {
+                    transform: `translateY(${desktopExpanded ? 0 : desktopCollapsedOffset}px)`,
+                  }
+            }
+          >
+            {selectedTaskIds.length > 0 && (
+              <div className="flex justify-center mb-3">
+                <div className="bg-gray-800/90 dark:bg-gray-800/90 backdrop-blur shadow-lg rounded-full flex items-center p-1 border border-white/10 pointer-events-auto">
+                  <button
+                    onClick={clearSelection}
+                    className="p-2 text-gray-300 hover:text-white transition-colors"
+                    title="取消选择"
+                  >
+                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                    </svg>
+                  </button>
+                  <div className="w-px h-5 bg-white/20 mx-1"></div>
+                  <button
+                    onClick={handleSelectAllToggle}
+                    className="p-2 text-blue-400 hover:text-blue-300 transition-colors"
+                    title={selectedTaskIds.length === filteredTasks.length && filteredTasks.length > 0 ? "取消全选" : "全选当前可见"}
+                  >
+                    {selectedTaskIds.length === filteredTasks.length && filteredTasks.length > 0 ? (
+                      <svg className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" viewBox="0 0 24 24">
+                        <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
+                        <path d="M9 12l2 2 4-4" />
+                      </svg>
+                    ) : (
+                      <svg className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" viewBox="0 0 24 24">
+                        <path strokeDasharray="4 4" d="M19 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V5a2 2 0 0 0-2-2z" />
+                      </svg>
+                    )}
+                  </button>
+                  <div className="w-px h-5 bg-white/20 mx-1"></div>
+                  <button
+                    onClick={handleToggleFavorite}
+                    className="p-2 text-yellow-400 hover:text-yellow-300 transition-colors"
+                    title="收藏/取消收藏"
+                  >
+                    {selectedTaskIds.length > 0 && selectedTaskIds.every((id) => tasks.find((t) => t.id === id)?.isFavorite) ? (
+                      <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
+                        <path d="M11.049 2.927c.3-.921 1.603-.921 1.902 0l1.519 4.674a1 1 0 00.95.69h4.915c.969 0 1.371 1.24.588 1.81l-3.976 2.888a1 1 0 00-.363 1.118l1.518 4.674c.3.922-.755 1.688-1.538 1.118l-3.976-2.888a1 1 0 00-1.176 0l-3.976 2.888c-.783.57-1.838-.197-1.538-1.118l1.518-4.674a1 1 0 00-.363-1.118l-3.976-2.888c-.784-.57-.38-1.81.588-1.81h4.914a1 1 0 00.951-.69l1.519-4.674z" />
+                      </svg>
+                    ) : (
+                      <svg className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" viewBox="0 0 24 24">
+                        <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
+                      </svg>
+                    )}
+                  </button>
+                  <div className="w-px h-5 bg-white/20 mx-1"></div>
+                  <button
+                    onClick={handleDeleteSelected}
+                    className="p-2 text-red-400 hover:text-red-300 transition-colors"
+                    title="删除选中"
+                  >
+                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                    </svg>
+                  </button>
+                </div>
+              </div>
+            )}
+            <div ref={cardRef} className="bg-white/70 dark:bg-gray-900/70 backdrop-blur-2xl border border-white/50 dark:border-white/[0.08] shadow-[0_8px_30px_rgb(0,0,0,0.08)] dark:shadow-[0_8px_30px_rgb(0,0,0,0.3)] rounded-2xl sm:rounded-3xl p-3 sm:p-4 ring-1 ring-black/5 dark:ring-white/10">
           {/* 移动端拖动条 */}
           <div
             ref={handleRef}
@@ -1053,74 +1194,90 @@ export default function InputBar() {
           {/* 参数 + 按钮 */}
           <div className="mt-3">
             {/* 桌面端布局 */}
-            <div className="hidden sm:flex items-end justify-between gap-3">
-              {renderParams('grid-cols-8')}
+            <div className="hidden sm:flex flex-col gap-3">
+              <div className="grid grid-cols-2 gap-2 text-xs lg:grid-cols-[minmax(0,1.45fr)_minmax(0,1.45fr)_minmax(140px,1fr)_minmax(96px,0.7fr)]">
+                {renderChannelField()}
+                {renderModelField()}
+                {renderSizeField()}
+                {renderCountField()}
+              </div>
 
-              <div className="flex gap-2 flex-shrink-0 mb-0.5">
-                <div
-                  className="relative"
-                  onMouseEnter={() => setAttachHover(true)}
-                  onMouseLeave={() => setAttachHover(false)}
-                >
-                  <ButtonTooltip visible={atImageLimit && attachHover} text={`参考图数量已达上限（${API_MAX_IMAGES} 张），无法继续添加`} />
+              <div className="grid grid-cols-2 gap-2 text-xs xl:grid-cols-4">
+                {renderQualityField()}
+                {renderFormatField()}
+                {renderCompressionField()}
+                {renderModerationField()}
+              </div>
+
+              <div className="flex flex-wrap items-center justify-between gap-2.5 rounded-xl border border-gray-200/60 bg-white/35 px-2.5 py-2 dark:border-white/[0.08] dark:bg-white/[0.02]">
+                <div className="flex flex-wrap items-center gap-2">
+                  <div
+                    className="relative"
+                    onMouseEnter={() => setAttachHover(true)}
+                    onMouseLeave={() => setAttachHover(false)}
+                  >
+                    <ButtonTooltip visible={atImageLimit && attachHover} text={`参考图数量已达上限（${API_MAX_IMAGES} 张），无法继续添加`} />
+                    <button
+                      onClick={() => !atImageLimit && fileInputRef.current?.click()}
+                      className={`p-2 rounded-lg transition-all shadow-sm ${
+                        atImageLimit
+                          ? 'bg-gray-200 dark:bg-white/[0.04] text-gray-300 dark:text-gray-500 cursor-not-allowed'
+                          : 'bg-gray-200 dark:bg-white/[0.06] hover:bg-gray-300 dark:hover:bg-white/[0.1] text-gray-500 dark:text-gray-300 hover:shadow'
+                      }`}
+                      title={atImageLimit ? `已达上限 ${API_MAX_IMAGES} 张` : '添加参考图'}
+                    >
+                      <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13" />
+                      </svg>
+                    </button>
+                  </div>
                   <button
-                    onClick={() => !atImageLimit && fileInputRef.current?.click()}
-                    className={`p-2.5 rounded-xl transition-all shadow-sm ${
-                      atImageLimit
-                        ? 'bg-gray-200 dark:bg-white/[0.04] text-gray-300 dark:text-gray-500 cursor-not-allowed'
-                        : 'bg-gray-200 dark:bg-white/[0.06] hover:bg-gray-300 dark:hover:bg-white/[0.1] text-gray-500 dark:text-gray-300 hover:shadow'
-                    }`}
-                    title={atImageLimit ? `已达上限 ${API_MAX_IMAGES} 张` : '添加参考图'}
+                    onClick={handleSaveCurrentTemplate}
+                    className="p-2 rounded-lg bg-gray-200 dark:bg-white/[0.06] hover:bg-gray-300 dark:hover:bg-white/[0.1] text-gray-500 dark:text-gray-300 transition-all shadow-sm hover:shadow"
+                    title="保存为模板"
                   >
                     <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13" />
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v16l-7-4-7 4z" />
+                    </svg>
+                  </button>
+                  <button
+                    onClick={handleOptimizePrompt}
+                    disabled={optimizingPrompt || !prompt.trim()}
+                    className="p-2 rounded-lg bg-gray-200 dark:bg-white/[0.06] hover:bg-gray-300 dark:hover:bg-white/[0.1] text-gray-500 dark:text-gray-300 transition-all shadow-sm hover:shadow disabled:opacity-40 disabled:cursor-not-allowed"
+                    title="优化提示词"
+                  >
+                    <svg className={`w-5 h-5 ${optimizingPrompt ? 'animate-spin' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 3 4 14h7l-1 7 9-11h-7l1-7z" />
+                    </svg>
+                  </button>
+                  <button
+                    onClick={() => setShowExperimentLab(true)}
+                    disabled={!prompt.trim()}
+                    className="p-2 rounded-lg bg-gray-200 dark:bg-white/[0.06] hover:bg-gray-300 dark:hover:bg-white/[0.1] text-gray-500 dark:text-gray-300 transition-all shadow-sm hover:shadow disabled:opacity-40 disabled:cursor-not-allowed"
+                    title="A/B 对比实验"
+                  >
+                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 7h16M7 12h10M10 17h4" />
                     </svg>
                   </button>
                 </div>
-                <button
-                  onClick={handleSaveCurrentTemplate}
-                  className="p-2.5 rounded-xl bg-gray-200 dark:bg-white/[0.06] hover:bg-gray-300 dark:hover:bg-white/[0.1] text-gray-500 dark:text-gray-300 transition-all shadow-sm hover:shadow"
-                  title="保存为模板"
-                >
-                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v16l-7-4-7 4z" />
-                  </svg>
-                </button>
-                <button
-                  onClick={handleOptimizePrompt}
-                  disabled={optimizingPrompt || !prompt.trim()}
-                  className="p-2.5 rounded-xl bg-gray-200 dark:bg-white/[0.06] hover:bg-gray-300 dark:hover:bg-white/[0.1] text-gray-500 dark:text-gray-300 transition-all shadow-sm hover:shadow disabled:opacity-40 disabled:cursor-not-allowed"
-                  title="优化提示词"
-                >
-                  <svg className={`w-5 h-5 ${optimizingPrompt ? 'animate-spin' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 3 4 14h7l-1 7 9-11h-7l1-7z" />
-                  </svg>
-                </button>
-                <button
-                  onClick={() => setShowExperimentLab(true)}
-                  disabled={!prompt.trim()}
-                  className="p-2.5 rounded-xl bg-gray-200 dark:bg-white/[0.06] hover:bg-gray-300 dark:hover:bg-white/[0.1] text-gray-500 dark:text-gray-300 transition-all shadow-sm hover:shadow disabled:opacity-40 disabled:cursor-not-allowed"
-                  title="A/B 对比实验"
-                >
-                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 7h16M7 12h10M10 17h4" />
-                  </svg>
-                </button>
+
                 <div
                   className="relative"
                   onMouseEnter={() => setSubmitHover(true)}
                   onMouseLeave={() => setSubmitHover(false)}
                 >
-              <ButtonTooltip visible={!hasGenerationConfig && submitHover} text={missingChannelMessage} />
+                  <ButtonTooltip visible={!hasGenerationConfig && submitHover} text={missingChannelMessage} />
                   <button
-                    onClick={() => hasGenerationConfig ? submitTask() : handleMissingGenerationConfig()}
+                    onClick={() => void handleSubmitFromComposer()}
                     disabled={hasGenerationConfig ? !canSubmit : false}
-                    className="p-2.5 rounded-xl bg-blue-500 text-white transition-all shadow-sm hover:bg-blue-600 hover:shadow disabled:bg-gray-300 dark:disabled:bg-white/[0.04] disabled:opacity-50 disabled:cursor-not-allowed"
+                    className="inline-flex min-w-[124px] items-center justify-center gap-1.5 rounded-lg bg-blue-500 px-3 py-2 text-sm font-medium text-white transition-all shadow-sm hover:bg-blue-600 hover:shadow disabled:bg-gray-300 dark:disabled:bg-white/[0.04] disabled:opacity-50 disabled:cursor-not-allowed"
                     title={hasGenerationConfig ? (maskDraft ? '遮罩编辑 (Ctrl+Enter)' : '生成 (Ctrl+Enter)') : '请先选择渠道和模型'}
                   >
-                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7l5 5m0 0l-5 5m5-5H6" />
                     </svg>
+                    <span>{maskDraft ? '遮罩编辑' : '生成图像'}</span>
                   </button>
                 </div>
               </div>
@@ -1130,7 +1287,7 @@ export default function InputBar() {
             <div className="sm:hidden flex flex-col gap-2">
               <div className={`collapse-section${mobileCollapsed ? ' collapsed' : ''}`}>
                 <div className="collapse-inner">
-                  {renderParams('grid-cols-2')}
+                  {renderMobileParams()}
                   <div className="h-2" />
                 </div>
               </div>
@@ -1192,7 +1349,7 @@ export default function InputBar() {
                 >
             <ButtonTooltip visible={!hasGenerationConfig && submitHover} text={missingChannelMessage} />
                   <button
-                    onClick={() => hasGenerationConfig ? submitTask() : handleMissingGenerationConfig()}
+                    onClick={() => void handleSubmitFromComposer()}
                     disabled={hasGenerationConfig ? !canSubmit : false}
                     className="w-full flex items-center justify-center gap-2 py-2.5 rounded-xl text-sm font-medium transition-all shadow-sm bg-blue-500 text-white hover:bg-blue-600 disabled:bg-gray-300 dark:disabled:bg-white/[0.04] disabled:opacity-50 disabled:cursor-not-allowed"
                   >
@@ -1205,31 +1362,18 @@ export default function InputBar() {
               </div>
             </div>
 
-            <div className="mt-3 flex items-center justify-between gap-3 rounded-xl border border-gray-200/70 bg-white/60 px-3 py-2 text-xs text-gray-500 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-400">
-              <span>提交后</span>
-              <div className="w-44">
-                <Select
-                  value={composerClearMode}
-                  onChange={(value) => setComposerClearMode(value as typeof composerClearMode)}
-                  options={[
-                    { label: '清空提示词', value: 'prompt_only' },
-                    { label: '清空提示词和参考图', value: 'prompt_and_images' },
-                    { label: '保留当前内容', value: 'keep_all' },
-                  ]}
-                  className="rounded-lg border border-gray-200 bg-white px-3 py-2 text-xs dark:border-white/[0.08] dark:bg-white/[0.04] dark:text-gray-200"
-                />
-              </div>
-            </div>
           </div>
 
-          <input
-            ref={fileInputRef}
-            type="file"
-            accept="image/*"
-            multiple
-            className="hidden"
-            onChange={handleFileUpload}
-          />
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept="image/*"
+                multiple
+                className="hidden"
+                onChange={handleFileUpload}
+              />
+            </div>
+          </div>
         </div>
       </div>
     </>

@@ -1,10 +1,25 @@
-import { Suspense, lazy, useState } from 'react'
+import { Suspense, lazy, useEffect, useMemo, useRef, useState } from 'react'
 import { useStore } from '../store'
 import { logoutBackend } from '../storeBackend'
 import { useVersionCheck } from '../hooks/useVersionCheck'
+import { useCloseOnEscape } from '../hooks/useCloseOnEscape'
+import {
+  compatibilityBadgeClass,
+  compatibilityStatusLabel,
+  healthBadgeClass,
+  healthStatusLabel,
+} from '../lib/channelHealth'
 import { canOpenSettings, roleLabel } from '../lib/roles'
 
 const HelpModal = lazy(() => import('./HelpModal'))
+const REPO_URL = 'https://github.com/1034378361/gpt_image_playground'
+
+function formatElapsed(value?: number | null) {
+  if (value == null) return '-'
+  const seconds = Math.max(0, Math.round(value / 1000))
+  if (seconds < 60) return `${seconds}s`
+  return `${Math.floor(seconds / 60)}m ${seconds % 60}s`
+}
 
 export default function Header() {
   const setShowSettings = useStore((s) => s.setShowSettings)
@@ -12,9 +27,42 @@ export default function Header() {
   const setCurrentView = useStore((s) => s.setCurrentView)
   const setTemplateEditor = useStore((s) => s.setTemplateEditor)
   const backendUser = useStore((s) => s.backendUser)
+  const channelLeaderboard = useStore((s) => s.channelLeaderboard)
+  const queueStats = useStore((s) => s.queueStats)
+  const tasks = useStore((s) => s.tasks)
   const { hasUpdate, latestRelease, dismiss } = useVersionCheck()
   const [showHelp, setShowHelp] = useState(false)
   const [loggingOut, setLoggingOut] = useState(false)
+  const [showChannelStatus, setShowChannelStatus] = useState(false)
+  const statusPanelRef = useRef<HTMLDivElement>(null)
+
+  useCloseOnEscape(showChannelStatus, () => setShowChannelStatus(false))
+
+  const healthSummary = useMemo(() => {
+    const healthy = channelLeaderboard.filter((item) => item.healthStatus === 'healthy').length
+    const problem = channelLeaderboard.filter((item) => item.healthStatus === 'degraded' || item.healthStatus === 'error').length
+    return { healthy, problem, total: channelLeaderboard.length }
+  }, [channelLeaderboard])
+
+  const hasActiveLocalTask = useMemo(
+    () => tasks.some((task) => task.status === 'queued' || task.status === 'running'),
+    [tasks],
+  )
+
+  const shouldShowQueueStats = Boolean(
+    queueStats && (hasActiveLocalTask || queueStats.queuedCount > 0 || queueStats.runningCount > 0),
+  )
+
+  useEffect(() => {
+    if (!showChannelStatus) return
+    const handlePointerDown = (event: MouseEvent) => {
+      if (!statusPanelRef.current?.contains(event.target as Node)) {
+        setShowChannelStatus(false)
+      }
+    }
+    document.addEventListener('mousedown', handlePointerDown)
+    return () => document.removeEventListener('mousedown', handlePointerDown)
+  }, [showChannelStatus])
 
   const handleLogout = async () => {
     setLoggingOut(true)
@@ -31,7 +79,7 @@ export default function Header() {
         <div className="flex items-start gap-1">
           <h1 className="text-lg font-bold tracking-tight">
             <a
-              href="https://github.com/CookSleep/gpt_image_playground"
+              href={REPO_URL}
               target="_blank"
               rel="noopener noreferrer"
               className="text-gray-800 dark:text-gray-100 hover:text-gray-600 dark:hover:text-gray-300 transition-colors"
@@ -53,6 +101,95 @@ export default function Header() {
           )}
         </div>
         <div className="flex items-center gap-1">
+          <div ref={statusPanelRef} className="relative">
+            <button
+              type="button"
+              onClick={() => setShowChannelStatus((value) => !value)}
+              className="inline-flex items-center gap-2 rounded-xl border border-gray-200 bg-white/70 px-2.5 py-1.5 text-xs text-gray-600 transition hover:bg-gray-100 dark:border-white/[0.08] dark:bg-gray-900/70 dark:text-gray-300 dark:hover:bg-white/[0.06]"
+              title="查看渠道状态"
+            >
+              <span className="font-medium">渠道状态</span>
+              {healthSummary.total > 0 && (
+                <>
+                  <span className="rounded-full bg-emerald-50 px-1.5 py-0.5 text-[10px] text-emerald-600 dark:bg-emerald-500/10 dark:text-emerald-300">
+                    健康 {healthSummary.healthy}
+                  </span>
+                  {healthSummary.problem > 0 && (
+                    <span className="rounded-full bg-amber-50 px-1.5 py-0.5 text-[10px] text-amber-600 dark:bg-amber-500/10 dark:text-amber-300">
+                      异常 {healthSummary.problem}
+                    </span>
+                  )}
+                </>
+              )}
+              <svg
+                className={`h-3.5 w-3.5 text-gray-400 transition-transform ${showChannelStatus ? 'rotate-180' : ''}`}
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+              >
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+              </svg>
+            </button>
+
+            {showChannelStatus && (
+              <div className="absolute right-0 top-full z-50 mt-2 w-[min(92vw,36rem)] overflow-hidden rounded-2xl border border-gray-200/70 bg-white/95 p-3 shadow-[0_12px_40px_rgb(0,0,0,0.12)] ring-1 ring-black/5 backdrop-blur-xl dark:border-white/[0.08] dark:bg-gray-900/95 dark:ring-white/10">
+                <div className="flex items-center justify-between gap-2">
+                  <div>
+                    <p className="text-sm font-medium text-gray-700 dark:text-gray-100">渠道状态</p>
+                    <p className="text-xs text-gray-400 dark:text-gray-500">点击按钮展开，按成功生成排序</p>
+                  </div>
+                  {queueStats && (
+                    <span className="text-xs text-gray-400 dark:text-gray-500">worker {queueStats.workerCount}</span>
+                  )}
+                </div>
+
+                {shouldShowQueueStats && queueStats && (
+                  <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
+                    <StatusMetric label="全站排队" value={queueStats.queuedCount} tone="amber" />
+                    <StatusMetric label="全站执行中" value={queueStats.runningCount} tone="blue" />
+                    <StatusMetric label="我的排队" value={queueStats.yourQueuedCount} tone="amber" />
+                    <StatusMetric label="我的执行中" value={queueStats.yourRunningCount} tone="blue" />
+                  </div>
+                )}
+
+                {channelLeaderboard.length > 0 ? (
+                  <div className="mt-3 max-h-[24rem] space-y-2 overflow-y-auto pr-1">
+                    {channelLeaderboard.slice(0, 10).map((item) => (
+                      <div
+                        key={`${item.channelId}-${item.model}-${item.apiMode}`}
+                        className="rounded-xl border border-gray-200/70 bg-gray-50/80 px-3 py-2.5 dark:border-white/[0.08] dark:bg-white/[0.03]"
+                      >
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="min-w-0">
+                            <p className="truncate text-sm font-medium text-gray-700 dark:text-gray-100">{item.channelName}</p>
+                            <p className="mt-0.5 truncate text-xs text-gray-500 dark:text-gray-400">{item.model || '-'}</p>
+                          </div>
+                          <div className="flex flex-wrap items-center justify-end gap-1">
+                            <span className={`rounded-full px-2 py-0.5 text-[10px] ${healthBadgeClass(item.healthStatus)}`}>
+                              {healthStatusLabel(item.healthStatus)}
+                            </span>
+                            <span className={`rounded-full px-2 py-0.5 text-[10px] ${compatibilityBadgeClass(item.compatibilityStatus)}`}>
+                              {compatibilityStatusLabel(item.compatibilityStatus)}
+                            </span>
+                          </div>
+                        </div>
+                        <div className="mt-2 grid grid-cols-4 gap-1.5 text-center text-[11px] text-gray-500 dark:text-gray-400">
+                          <span className="rounded-lg bg-white px-1.5 py-1 dark:bg-white/[0.05]">成功 {item.successCount}</span>
+                          <span className="rounded-lg bg-white px-1.5 py-1 dark:bg-white/[0.05]">{Math.round(item.successRate * 100)}%</span>
+                          <span className="rounded-lg bg-white px-1.5 py-1 dark:bg-white/[0.05]">{formatElapsed(item.averageElapsed)}</span>
+                          <span className="rounded-lg bg-white px-1.5 py-1 dark:bg-white/[0.05]">总计 {item.totalCount}</span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="mt-3 rounded-xl border border-dashed border-gray-200/70 px-3 py-4 text-xs text-gray-400 dark:border-white/[0.08] dark:text-gray-500">
+                    暂无渠道统计数据
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
           {backendUser && (
             <div className="mr-1 hidden items-center gap-2 rounded-xl border border-gray-200 bg-white/70 px-2 py-1 dark:border-white/[0.08] dark:bg-gray-900/70 sm:flex">
               <div className="min-w-0">
@@ -167,5 +304,27 @@ export default function Header() {
         </Suspense>
       )}
     </header>
+  )
+}
+
+function StatusMetric({
+  label,
+  value,
+  tone,
+}: {
+  label: string
+  value: number
+  tone: 'amber' | 'blue'
+}) {
+  const className =
+    tone === 'amber'
+      ? 'bg-amber-50 text-amber-700 dark:bg-amber-500/10 dark:text-amber-200'
+      : 'bg-blue-50 text-blue-700 dark:bg-blue-500/10 dark:text-blue-200'
+
+  return (
+    <div className={`rounded-xl px-3 py-2 text-sm ${className}`}>
+      <div className="text-lg font-semibold">{value}</div>
+      <div className="text-[11px] opacity-80">{label}</div>
+    </div>
   )
 }

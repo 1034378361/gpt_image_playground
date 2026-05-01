@@ -1,9 +1,8 @@
 import { Suspense, lazy, useEffect } from 'react'
 import { useStore } from './store'
-import { initStore } from './storeBackend'
+import { initStore, syncServerData } from './storeBackend'
 import AuthScreen from './components/AuthScreen'
 import Header from './components/Header'
-import ChannelLeaderboard from './components/ChannelLeaderboard'
 import SearchBar from './components/SearchBar'
 import Toast from './components/Toast'
 
@@ -58,6 +57,31 @@ export default function App() {
     return () => document.removeEventListener('dragstart', preventPageImageDrag)
   }, [])
 
+  useEffect(() => {
+    if (!backendUser) return
+
+    let syncing = false
+    const refresh = () => {
+      if (syncing || document.visibilityState !== 'visible') return
+      syncing = true
+      void syncServerData().finally(() => {
+        syncing = false
+      })
+    }
+
+    const handleFocus = () => refresh()
+    const handleVisibilityChange = () => refresh()
+    const intervalId = window.setInterval(refresh, 60_000)
+
+    window.addEventListener('focus', handleFocus)
+    document.addEventListener('visibilitychange', handleVisibilityChange)
+    return () => {
+      window.clearInterval(intervalId)
+      window.removeEventListener('focus', handleFocus)
+      document.removeEventListener('visibilitychange', handleVisibilityChange)
+    }
+  }, [backendUser])
+
   if (!backendReady) {
     return (
       <>
@@ -109,13 +133,11 @@ export default function App() {
           {currentView === 'templates' ? (
             <>
               <TemplateFilterBar />
-              <ChannelLeaderboard />
               <TemplateGrid />
             </>
           ) : (
             <>
               <SearchBar />
-              <ChannelLeaderboard />
               <TaskGrid />
             </>
           )}

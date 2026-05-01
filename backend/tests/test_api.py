@@ -33,8 +33,11 @@ def make_client(monkeypatch, tmp_path):
     return TestClient(main.app)
 
 
-def register(client: TestClient):
-    response = client.post("/api/auth/register", json={"username": "alice", "password": "password123"})
+def register(client: TestClient, username: str = "alice", password: str = "password123", invite_code: str | None = None):
+    payload = {"username": username, "password": password}
+    if invite_code is not None:
+        payload["inviteCode"] = invite_code
+    response = client.post("/api/auth/register", json=payload)
     assert response.status_code == 200
     return response.json()
 
@@ -119,6 +122,207 @@ def test_auth_register_login_logout(monkeypatch, tmp_path):
     login = client.post("/api/auth/login", json={"username": "alice", "password": "password123"})
     assert login.status_code == 200
     assert client.get("/api/auth/me").json()["username"] == "alice"
+
+
+def test_admin_can_close_registration_and_reopen(monkeypatch, tmp_path):
+    client = make_client(monkeypatch, tmp_path)
+
+    register(client)
+    settings = client.get("/api/auth/settings")
+    assert settings.status_code == 200
+    assert settings.json()["registrationMode"] == "open"
+
+    updated = client.patch("/api/admin/auth/settings", json={"registrationMode": "disabled"})
+    assert updated.status_code == 200
+    assert updated.json()["registrationMode"] == "disabled"
+    assert updated.json()["allowRegistration"] is False
+
+    client.post("/api/auth/logout")
+    blocked = client.post("/api/auth/register", json={"username": "bob", "password": "password123"})
+    assert blocked.status_code == 403
+    assert "关闭" in blocked.text
+
+    login(client, "alice")
+    reopened = client.patch("/api/admin/auth/settings", json={"registrationMode": "open"})
+    assert reopened.status_code == 200
+    client.post("/api/auth/logout")
+
+    second_user = client.post("/api/auth/register", json={"username": "bob", "password": "password123"})
+    assert second_user.status_code == 200
+    assert second_user.json()["role"] == "user"
+
+
+def test_invite_only_registration_requires_valid_invite_code(monkeypatch, tmp_path):
+    client = make_client(monkeypatch, tmp_path)
+
+    register(client)
+    switched = client.patch("/api/admin/auth/settings", json={"registrationMode": "invite_only"})
+    assert switched.status_code == 200
+    assert switched.json()["inviteCodeRequired"] is True
+
+    created = client.post(
+        "/api/admin/auth/invite-codes",
+        json={"note": "beta", "maxUses": 1},
+    )
+    assert created.status_code == 200
+    invite = created.json()
+    assert invite["usedCount"] == 0
+    assert invite["remainingUses"] == 1
+
+    client.post("/api/auth/logout")
+    missing = client.post("/api/auth/register", json={"username": "bob", "password": "password123"})
+    assert missing.status_code == 400
+    assert "邀请码" in missing.text
+
+    invalid = client.post(
+        "/api/auth/register",
+        json={"username": "bob", "password": "password123", "inviteCode": "INV-INVALID"},
+    )
+    assert invalid.status_code == 400
+
+    accepted = client.post(
+        "/api/auth/register",
+        json={"username": "bob", "password": "password123", "inviteCode": invite["code"]},
+    )
+    assert accepted.status_code == 200
+    assert accepted.json()["role"] == "user"
+
+    login(client, "alice")
+    listed = client.get("/api/admin/auth/invite-codes")
+    assert listed.status_code == 200
+    updated_invite = next(item for item in listed.json() if item["id"] == invite["id"])
+    assert updated_invite["usedCount"] == 1
+    assert updated_invite["recentUses"][0]["username"] == "bob"
+
+    client.post("/api/auth/logout")
+    exhausted = client.post(
+        "/api/auth/register",
+        json={"username": "carol", "password": "password123", "inviteCode": invite["code"]},
+    )
+    assert exhausted.status_code == 400
+    assert "用完" in exhausted.text
+
+
+def test_admin_can_batch_create_invite_codes(monkeypatch, tmp_path):
+    client = make_client(monkeypatch, tmp_path)
+
+    register(client)
+    created = client.post(
+        "/api/admin/auth/invite-codes/batch",
+        json={"count": 3, "note": "batch", "maxUses": 2},
+    )
+    assert created.status_code == 200
+    body = created.json()
+    assert len(body) == 3
+    assert len({item["code"] for item in body}) == 3
+    assert all(item["note"] == "batch" for item in body)
+    assert all(item["maxUses"] == 2 for item in body)
+
+    listed = client.get("/api/admin/auth/invite-codes")
+    assert listed.status_code == 200
+    assert len(listed.json()) == 3
+
+
+def test_admin_batch_invite_codes_default_to_single_use(monkeypatch, tmp_path):
+    client = make_client(monkeypatch, tmp_path)
+
+    register(client)
+    created = client.post(
+        "/api/admin/auth/invite-codes/batch",
+        json={"count": 2, "note": "default-single-use"},
+    )
+    assert created.status_code == 200
+    body = created.json()
+    assert len(body) == 2
+    assert all(item["maxUses"] == 1 for item in body)
+    assert all(item["remainingUses"] == 1 for item in body)
+
+
+def test_admin_can_edit_invite_code_metadata(monkeypatch, tmp_path):
+    client = make_client(monkeypatch, tmp_path)
+
+    register(client)
+    created = client.post(
+        "/api/admin/auth/invite-codes",
+        json={"note": "old", "maxUses": 2},
+    )
+    assert created.status_code == 200
+    invite = created.json()
+
+    expires_at = int(time.time() * 1000) + 86400000
+    updated = client.patch(
+        f"/api/admin/auth/invite-codes/{invite['id']}",
+        json={"note": "new note", "maxUses": 5, "expiresAt": expires_at},
+    )
+    assert updated.status_code == 200
+    body = updated.json()
+    assert body["note"] == "new note"
+    assert body["maxUses"] == 5
+    assert body["expiresAt"] == expires_at
+
+    cleared = client.patch(
+        f"/api/admin/auth/invite-codes/{invite['id']}",
+        json={"maxUses": None, "expiresAt": None},
+    )
+    assert cleared.status_code == 200
+    cleared_body = cleared.json()
+    assert cleared_body["maxUses"] is None
+    assert cleared_body["expiresAt"] is None
+
+
+def test_admin_invite_code_patch_rejects_null_enabled(monkeypatch, tmp_path):
+    client = make_client(monkeypatch, tmp_path)
+
+    register(client)
+    created = client.post(
+        "/api/admin/auth/invite-codes",
+        json={"note": "nullable-enabled"},
+    )
+    assert created.status_code == 200
+    invite = created.json()
+
+    invalid = client.patch(
+        f"/api/admin/auth/invite-codes/{invite['id']}",
+        json={"isEnabled": None},
+    )
+    assert invalid.status_code == 400
+    assert "不能为空" in invalid.text
+
+
+def test_admin_can_list_full_invite_code_use_history(monkeypatch, tmp_path):
+    client = make_client(monkeypatch, tmp_path)
+
+    admin = register(client)
+    switched = client.patch("/api/admin/auth/settings", json={"registrationMode": "invite_only"})
+    assert switched.status_code == 200
+    created = client.post(
+        "/api/admin/auth/invite-codes",
+        json={"note": "history"},
+    )
+    assert created.status_code == 200
+    invite = created.json()
+
+    client.post("/api/auth/logout")
+    first_user = client.post(
+        "/api/auth/register",
+        json={"username": "bob", "password": "password123", "inviteCode": invite["code"]},
+    )
+    assert first_user.status_code == 200
+
+    client.post("/api/auth/logout")
+    second_user = client.post(
+        "/api/auth/register",
+        json={"username": "carol", "password": "password123", "inviteCode": invite["code"]},
+    )
+    assert second_user.status_code == 200
+
+    client.post("/api/auth/logout")
+    login(client, admin["username"])
+    uses = client.get(f"/api/admin/auth/invite-codes/{invite['id']}/uses?limit=10")
+    assert uses.status_code == 200
+    body = uses.json()
+    assert len(body) == 2
+    assert [item["username"] for item in body] == ["carol", "bob"]
 
 
 def test_template_crud_duplicate_and_generation_link(monkeypatch, tmp_path):
@@ -282,6 +486,14 @@ A polished character design sheet with turnaround poses, clean lighting, express
 
 ![sample](images/character.png)
 """,
+        "docs/setup-guide": """
+## Installation Guide
+
+**Prompt:**
+```text
+Run `pip install deer-flow`, then launch the local service with `docker compose up --build` and connect to http://localhost:2026.
+```
+""",
     }
 
     class FakeAsyncClient:
@@ -320,6 +532,16 @@ A polished character design sheet with turnaround poses, clean lighting, express
                                 "default_branch": "main",
                                 "pushed_at": "2026-04-01T00:00:00Z",
                                 "license": {"spdx_id": "Apache-2.0", "name": "Apache License 2.0"},
+                            },
+                            {
+                                "full_name": "docs/setup-guide",
+                                "html_url": "https://github.com/docs/setup-guide",
+                                "description": "Developer setup notes",
+                                "stargazers_count": 88,
+                                "forks_count": 9,
+                                "default_branch": "main",
+                                "pushed_at": "2026-04-01T00:00:00Z",
+                                "license": {"spdx_id": "MIT", "name": "MIT License"},
                             },
                         ]
                     },
@@ -361,6 +583,7 @@ A polished character design sheet with turnaround poses, clean lighting, express
 
     submissions = client.get("/api/admin/template-submissions").json()
     assert any(item["sourceName"] == "GitHub acme/image-prompts" and item["submissionStatus"] == "submitted" for item in submissions)
+    assert all(item["sourceName"] != "GitHub docs/setup-guide" for item in submissions)
 
     public_templates = client.get("/api/templates?scope=public").json()
     assert any(item["sourceName"] == "GitHub trusted/prompt-vault" and item["submissionStatus"] == "approved" for item in public_templates)

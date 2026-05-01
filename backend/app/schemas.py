@@ -12,6 +12,7 @@ TaskStatus = Literal["queued", "running", "done", "error", "canceled"]
 UserRole = Literal["user", "reviewer", "admin"]
 TemplateVisibility = Literal["private", "public"]
 TemplateSubmissionStatus = Literal["draft", "submitted", "approved", "rejected"]
+RegistrationMode = Literal["disabled", "open", "invite_only"]
 
 
 class GenerationDiagnosticOut(BaseModel):
@@ -74,6 +75,60 @@ class UserRolePatchIn(BaseModel):
 class AuthIn(BaseModel):
     username: str = Field(min_length=3, max_length=64)
     password: str = Field(min_length=8, max_length=256)
+
+
+class AuthRegisterIn(AuthIn):
+    inviteCode: str | None = Field(default=None, max_length=128)
+
+
+class AuthSettingsOut(BaseModel):
+    registrationMode: RegistrationMode = "open"
+    allowRegistration: bool = True
+    inviteCodeRequired: bool = False
+    hasUsers: bool = False
+    updatedAt: int | None = None
+
+
+class AuthSettingsPatch(BaseModel):
+    registrationMode: RegistrationMode | None = None
+
+
+class InviteCodeIn(BaseModel):
+    note: str = Field(default="", max_length=120)
+    maxUses: int | None = Field(default=None, ge=1, le=100000)
+    expiresAt: int | None = None
+
+
+class InviteCodeBatchIn(InviteCodeIn):
+    count: int = Field(default=10, ge=1, le=200)
+
+
+class InviteCodePatch(BaseModel):
+    note: str | None = Field(default=None, max_length=120)
+    maxUses: int | None = Field(default=None, ge=1, le=100000)
+    expiresAt: int | None = None
+    isEnabled: bool | None = None
+
+
+class InviteCodeUseOut(BaseModel):
+    id: str
+    userId: str | None = None
+    username: str = ""
+    usedAt: int
+
+
+class InviteCodeOut(BaseModel):
+    id: str
+    code: str
+    note: str = ""
+    maxUses: int | None = None
+    usedCount: int = 0
+    remainingUses: int | None = None
+    isEnabled: bool = True
+    expiresAt: int | None = None
+    recentUses: list[InviteCodeUseOut] = Field(default_factory=list)
+    createdAt: int
+    updatedAt: int
 
 
 class TaskParams(BaseModel):
