@@ -1,8 +1,6 @@
 services:
   app:
-    build:
-      context: .
-      dockerfile: deploy/Dockerfile.all-in-one
+    image: ${GIP_IMAGE_NAME:-gpt-image-playground}:${GIP_IMAGE_TAG:-latest}
     container_name: gip-app
     restart: unless-stopped
     environment:
@@ -18,6 +16,9 @@ services:
       GIP_ASSET_DIR: /app/backend/data/assets
       GIP_RESTORE_POINT_DIR: /app/backend/data/restore-points
       GIP_RESTORE_POINT_RETENTION: ${GIP_RESTORE_POINT_RETENTION:-10}
+      GIP_STARTUP_BACKUP_ENABLED: ${GIP_STARTUP_BACKUP_ENABLED:-true}
+      GIP_STARTUP_BACKUP_RETENTION: ${GIP_STARTUP_BACKUP_RETENTION:-5}
+      GIP_STARTUP_BACKUP_DIR: /app/backend/data/startup-backups
       GIP_CORS_ORIGINS: ${GIP_CORS_ORIGINS:-http://localhost:8080}
       GIP_FRONTEND_DIST_DIR: /app/dist
     volumes:

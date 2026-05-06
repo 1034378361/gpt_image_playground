@@ -172,21 +172,27 @@ Compose 已经默认把下面的目录挂载到宿主机：
 
 ### 4. 更新
 
+双容器源码部署仍然可以继续使用：
+
 ```bash
 docker compose up -d --build
 ```
 
-如果你是先 `git pull` 再更新，这一条就够了。
+如果你希望改成“按镜像版本升级容器”，请优先使用单镜像方案，相关文件和升级步骤见：
+
+- `deploy/FN_NAS_SINGLE_IMAGE.md`
+- `docker-compose.single.yml`
+- `deploy/build-single-image.mjs`
 
 ### 5. 说明
 
 - Compose 用的是：
   - `deploy/Dockerfile.frontend`
   - `deploy/Dockerfile.backend`
-  - `deploy/nginx.docker.conf`
+- `deploy/nginx.docker.conf`
 - `deploy/Dockerfile` 也已经切到同样的反向代理模式，适合单独构建前端壳镜像后再自己指定后端上游
 - 如果你是飞牛 NAS，可直接参考 `deploy/FN_NAS_DEPLOY.md`
-- 如果你想改成单镜像部署，可参考 `deploy/FN_NAS_SINGLE_IMAGE.md`、`deploy/Dockerfile.all-in-one` 和 `docker-compose.single.yml`
+- 如果你想改成支持镜像版本管理的单镜像部署，可参考 `deploy/FN_NAS_SINGLE_IMAGE.md`、`deploy/Dockerfile.all-in-one`、`docker-compose.single.yml`、`docker-compose.single.build.yml` 和 `deploy/build-single-image.mjs`
 - 如果你不使用内置 `frontend` 容器，而是自己已有反向代理，也可以参考 `deploy/nginx.reverse-proxy.conf.example`
 
 </details>

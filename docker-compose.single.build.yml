@@ -1,0 +1,9 @@
+services:
+  app:
+    build:
+      context: .
+      dockerfile: deploy/Dockerfile.all-in-one
+      args:
+        APP_VERSION: ${GIP_IMAGE_BUILD_VERSION:-dev}
+        VCS_REF: ${GIP_IMAGE_BUILD_VCS_REF:-local}
+        BUILD_DATE: ${GIP_IMAGE_BUILD_DATE:-unknown}

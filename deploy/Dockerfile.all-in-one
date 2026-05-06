@@ -10,10 +10,22 @@ RUN npm run build
 
 FROM python:3.12-slim
 
+ARG APP_VERSION=dev
+ARG VCS_REF=unknown
+ARG BUILD_DATE=unknown
+
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
+ENV GIP_APP_VERSION=${APP_VERSION}
+ENV GIP_VCS_REF=${VCS_REF}
+ENV GIP_BUILD_DATE=${BUILD_DATE}
 
 WORKDIR /app
+
+LABEL org.opencontainers.image.title="gpt-image-playground" \
+      org.opencontainers.image.version="${APP_VERSION}" \
+      org.opencontainers.image.revision="${VCS_REF}" \
+      org.opencontainers.image.created="${BUILD_DATE}"
 
 COPY backend/requirements.txt ./backend/requirements.txt
 RUN python -m pip install --upgrade pip \
@@ -21,13 +33,20 @@ RUN python -m pip install --upgrade pip \
 
 COPY backend ./backend
 COPY --from=frontend-build /app/dist ./dist
+COPY deploy/docker-entrypoint.sh /app/deploy/docker-entrypoint.sh
+
+RUN chmod +x /app/deploy/docker-entrypoint.sh
 
 ENV GIP_DATA_DIR=/app/backend/data
 ENV GIP_DATABASE_PATH=/app/backend/data/app.sqlite3
 ENV GIP_ASSET_DIR=/app/backend/data/assets
 ENV GIP_RESTORE_POINT_DIR=/app/backend/data/restore-points
 ENV GIP_FRONTEND_DIST_DIR=/app/dist
+ENV GIP_STARTUP_BACKUP_ENABLED=true
+ENV GIP_STARTUP_BACKUP_RETENTION=5
+ENV GIP_STARTUP_BACKUP_DIR=/app/backend/data/startup-backups
 
 EXPOSE 8000
 
+ENTRYPOINT ["/app/deploy/docker-entrypoint.sh"]
 CMD ["python", "-m", "uvicorn", "backend.app.main:app", "--host", "0.0.0.0", "--port", "8000"]

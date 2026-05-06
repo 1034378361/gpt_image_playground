@@ -7,3 +7,6 @@ backend/dev-server*.log
 .vite-dev*.log
 *.pyc
 __pycache__/
+*.tar
+.tmp-*.tar*
+deploy/single-image-build.json
