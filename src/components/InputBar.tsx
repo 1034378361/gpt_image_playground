@@ -1030,7 +1030,18 @@ export default function InputBar() {
                   <button
                     onClick={handleOptimizePrompt}
                     disabled={optimizingPrompt || !prompt.trim()}
-                    className="p-2 rounded-lg bg-gray-200 dark:bg-white/[0.06] hover:bg-gray-300 dark:hover:bg-white/[0.1] text-gray-500 dark:text-gray-300 transition-all shadow-sm hover:shadow disabled:opacity-40 disabled:cursor-not-allowed"
+                    className="hidden sm:flex items-center gap-1.5 px-3 py-2 rounded-lg bg-amber-50 dark:bg-amber-500/10 hover:bg-amber-100 dark:hover:bg-amber-500/20 text-amber-600 dark:text-amber-400 transition-all shadow-sm hover:shadow disabled:opacity-40 disabled:cursor-not-allowed text-sm font-medium"
+                    title="优化提示词"
+                  >
+                    <svg className={`w-4 h-4 ${optimizingPrompt ? 'animate-spin' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 3 4 14h7l-1 7 9-11h-7l1-7z" />
+                    </svg>
+                    {optimizingPrompt ? '优化中' : '增强'}
+                  </button>
+                  <button
+                    onClick={handleOptimizePrompt}
+                    disabled={optimizingPrompt || !prompt.trim()}
+                    className="sm:hidden p-2 rounded-lg bg-amber-50 dark:bg-amber-500/10 hover:bg-amber-100 dark:hover:bg-amber-500/20 text-amber-600 dark:text-amber-400 transition-all shadow-sm hover:shadow disabled:opacity-40 disabled:cursor-not-allowed"
                     title="优化提示词"
                   >
                     <svg className={`w-5 h-5 ${optimizingPrompt ? 'animate-spin' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -1148,7 +1159,7 @@ export default function InputBar() {
                 <button
                   onClick={handleOptimizePrompt}
                   disabled={optimizingPrompt || !prompt.trim()}
-                  className="p-2.5 rounded-xl bg-gray-200 dark:bg-white/[0.06] hover:bg-gray-300 dark:hover:bg-white/[0.1] text-gray-500 dark:text-gray-300 transition-all shadow-sm flex-shrink-0 disabled:opacity-40 disabled:cursor-not-allowed"
+                  className="p-2.5 rounded-xl bg-amber-50 dark:bg-amber-500/10 hover:bg-amber-100 dark:hover:bg-amber-500/20 text-amber-600 dark:text-amber-400 transition-all shadow-sm flex-shrink-0 disabled:opacity-40 disabled:cursor-not-allowed"
                   title="优化提示词"
                 >
                   <svg className={`w-5 h-5 ${optimizingPrompt ? 'animate-spin' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">

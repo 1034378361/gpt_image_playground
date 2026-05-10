@@ -7,6 +7,7 @@ import { ActualValueBadge, DetailParamValue } from '../lib/paramDisplay'
 import { copyBlobToClipboard, copyTextToClipboard, getClipboardFailureMessage } from '../lib/clipboard'
 import { createMaskPreviewDataUrl } from '../lib/canvasImage'
 import { getPrimaryDiagnostic, getTaskFailureDetail, getTaskFailureSummary } from '../lib/taskDiagnostics'
+import ComparisonSlider from './ComparisonSlider'
 
 export default function DetailModal() {
   const tasks = useStore((s) => s.tasks)
@@ -29,6 +30,7 @@ export default function DetailModal() {
   const [imageRatios, setImageRatios] = useState<Record<string, string>>({})
   const [imageSizes, setImageSizes] = useState<Record<string, string>>({})
   const [maskPreviewSrc, setMaskPreviewSrc] = useState('')
+  const [showComparison, setShowComparison] = useState(false)
   const [now, setNow] = useState(Date.now())
   const imagePanelRef = useRef<HTMLDivElement>(null)
   const mainImageRef = useRef<HTMLImageElement>(null)
@@ -324,7 +326,11 @@ export default function DetailModal() {
 
         {/* 左侧：图片 */}
         <div ref={imagePanelRef} className="md:w-1/2 w-full h-64 md:h-auto bg-gray-100 dark:bg-black/20 relative flex items-center justify-center flex-shrink-0 min-h-[16rem]">
-          {task.status === 'done' && outputLen > 0 && (
+          {task.status === 'done' && outputLen > 0 && showComparison && maskTargetSrc && currentOutputImageSrc ? (
+            <div className="w-full h-full p-4 flex items-center justify-center">
+              <ComparisonSlider beforeSrc={maskTargetSrc} afterSrc={currentOutputImageSrc} />
+            </div>
+          ) : task.status === 'done' && outputLen > 0 && (
             <>
               <img
                 ref={mainImageRef}
@@ -397,6 +403,18 @@ export default function DetailModal() {
                 </>
               )}
             </>
+          )}
+          {task.status === 'done' && maskTargetId && maskTargetSrc && currentOutputImageSrc && (
+            <button
+              onClick={() => setShowComparison((v) => !v)}
+              className={`absolute bottom-2 right-2 z-10 rounded-lg px-2 py-1 text-xs font-medium transition ${
+                showComparison
+                  ? 'bg-blue-500 text-white'
+                  : 'bg-black/50 text-white/80 hover:bg-black/70 backdrop-blur-sm'
+              }`}
+            >
+              {showComparison ? '关闭对比' : '对比原图'}
+            </button>
           )}
           {task.status === 'queued' && (
             <>
