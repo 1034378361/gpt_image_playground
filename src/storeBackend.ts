@@ -301,6 +301,44 @@ export async function submitTask(options: { allowFullMask?: boolean } = {}) {
   return task
 }
 
+export async function generateVariation(sourceTask: TaskRecord, imageId: string) {
+  const { backendUser, settings, channels, showToast } = useStore.getState()
+  if (!backendUser) {
+    showToast('请先登录', 'error')
+    return
+  }
+  if (!settings.channelId || !settings.model) {
+    showToast('请先选择渠道和模型', 'error')
+    return
+  }
+
+  const dataUrl = await ensureImageCached(imageId)
+  if (!dataUrl) {
+    showToast('图片已不可用', 'error')
+    return
+  }
+
+  const normalizedParams = {
+    ...sourceTask.params,
+    size: normalizeImageSize(sourceTask.params.size) || DEFAULT_PARAMS.size,
+  }
+
+  const task = await queuePreparedTask({
+    prompt: sourceTask.prompt,
+    normalizedParams,
+    orderedInputImages: [{ id: imageId, dataUrl }],
+    maskImageId: null,
+    maskTargetImageId: null,
+    sourceTemplate: null,
+    projectId: sourceTask.projectId ?? null,
+    parentTaskId: sourceTask.id,
+  })
+
+  await storeImage(dataUrl)
+  showToast('已提交变体生成', 'success')
+  return task
+}
+
 export async function submitTaskMatrix(
   variants: Array<{
     channelId: string

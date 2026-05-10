@@ -1,6 +1,6 @@
 import { useEffect, useState, useMemo, useRef } from 'react'
 import { useStore, getCachedImage, ensureImageCached, reuseConfig, editOutputs, removeTask, updateTaskInStore, showCodexCliPrompt, getCodexCliPromptKey, setTemplateCover } from '../store'
-import { cancelTask } from '../storeBackend'
+import { cancelTask, generateVariation } from '../storeBackend'
 import { useCloseOnEscape } from '../hooks/useCloseOnEscape'
 import { formatImageRatio } from '../lib/size'
 import { ActualValueBadge, DetailParamValue } from '../lib/paramDisplay'
@@ -203,6 +203,12 @@ export default function DetailModal() {
 
   const handleReuse = () => {
     reuseConfig(task)
+    setDetailTaskId(null)
+  }
+
+  const handleGenerateVariation = () => {
+    if (!currentOutputImageId) return
+    void generateVariation(task, currentOutputImageId)
     setDetailTaskId(null)
   }
 
@@ -739,6 +745,17 @@ export default function DetailModal() {
               </svg>
               编辑输出
             </button>
+            {currentOutputImageId && task.status === 'done' && (
+              <button
+                onClick={handleGenerateVariation}
+                className="col-span-2 sm:flex-1 flex items-center justify-center gap-1.5 px-3 py-2 rounded-xl bg-teal-50 dark:bg-teal-500/10 text-teal-600 dark:text-teal-400 hover:bg-teal-100 dark:hover:bg-teal-500/20 transition text-sm font-medium whitespace-nowrap"
+              >
+                <svg className="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                </svg>
+                生成变体
+              </button>
+            )}
             <button
               onClick={handleSaveAsTemplate}
               className="col-span-2 sm:flex-1 flex items-center justify-center gap-1.5 px-3 py-2 rounded-xl bg-purple-50 dark:bg-purple-500/10 text-purple-600 dark:text-purple-400 hover:bg-purple-100 dark:hover:bg-purple-500/20 transition text-sm font-medium whitespace-nowrap"

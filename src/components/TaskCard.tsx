@@ -107,6 +107,29 @@ export default function TaskCard({
 
   const isActiveTask = task.status === 'queued' || task.status === 'running'
 
+  const handleToggleFavorite = () => {
+    updateTaskInStore(task.id, { isFavorite: !task.isFavorite })
+  }
+
+  const handleDownload = async () => {
+    const imgId = task.outputImages?.[0]
+    if (!imgId) return
+    const dataUrl = thumbSrc || await ensureImageCached(imgId)
+    if (!dataUrl) return
+    try {
+      const res = await fetch(dataUrl)
+      const blob = await res.blob()
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `${imgId}.${blob.type.split('/')[1] || 'png'}`
+      document.body.appendChild(a)
+      a.click()
+      document.body.removeChild(a)
+      URL.revokeObjectURL(url)
+    } catch { /* ignore */ }
+  }
+
   // 定时更新排队/运行中任务的计时
   useEffect(() => {
     if (!isActiveTask) return
@@ -351,9 +374,38 @@ export default function TaskCard({
               </>
             )}
           </div>
+          {task.status === 'done' && thumbSrc && (
+            <div className="absolute inset-0 bg-black/0 hover:bg-black/40 transition-colors duration-200 flex items-end justify-center opacity-0 hover:opacity-100 pb-2 gap-1.5 group/hover">
+              <button
+                onClick={(e) => { e.stopPropagation(); onReuse() }}
+                className="p-1.5 rounded-lg bg-white/90 text-gray-700 hover:bg-white shadow-sm transition"
+                title="复用配置"
+              >
+                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" />
+                </svg>
+              </button>
+              <button
+                onClick={(e) => { e.stopPropagation(); handleToggleFavorite() }}
+                className="p-1.5 rounded-lg bg-white/90 text-gray-700 hover:bg-white shadow-sm transition"
+                title={task.isFavorite ? '取消收藏' : '收藏'}
+              >
+                <svg className="w-3.5 h-3.5" fill={task.isFavorite ? 'currentColor' : 'none'} stroke="currentColor" viewBox="0 0 24 24">
+                  <polygon strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
+                </svg>
+              </button>
+              <button
+                onClick={(e) => { e.stopPropagation(); handleDownload() }}
+                className="p-1.5 rounded-lg bg-white/90 text-gray-700 hover:bg-white shadow-sm transition"
+                title="下载"
+              >
+                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                </svg>
+              </button>
+            </div>
+          )}
         </div>
-
-        {/* 右侧信息区域 */}
         <div className="flex-1 p-3 flex flex-col min-w-0">
           {(task.variationLabel || task.projectId) && (
             <div className="mb-2 flex flex-wrap gap-1.5">
