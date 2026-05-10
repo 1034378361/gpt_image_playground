@@ -257,9 +257,9 @@ export default function TaskCard({
           </svg>
         </div>
       )}
-      <div className="flex h-40">
-        {/* 左侧图片区域 */}
-        <div className="w-40 min-w-[10rem] h-full bg-gray-100 dark:bg-black/20 relative flex items-center justify-center overflow-hidden flex-shrink-0">
+      <div className="flex flex-col">
+        {/* 图片区域 */}
+        <div className="w-full bg-gray-100 dark:bg-black/20 relative flex items-center justify-center overflow-hidden" style={{ minHeight: '8rem' }}>
           {task.status === 'queued' && (
             <div className="flex flex-col items-center gap-2">
               <svg className="w-8 h-8 text-amber-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -328,7 +328,7 @@ export default function TaskCard({
                 src={thumbSrc}
                 data-image-id={task.outputImages[0]}
                 data-template-id={task.templateId}
-                className="w-full h-full object-cover"
+                className="w-full object-contain"
                 loading="lazy"
                 alt=""
               />
@@ -406,7 +406,7 @@ export default function TaskCard({
             </div>
           )}
         </div>
-        <div className="flex-1 p-3 flex flex-col min-w-0">
+        <div className="p-3 flex flex-col min-w-0">
           {(task.variationLabel || task.projectId) && (
             <div className="mb-2 flex flex-wrap gap-1.5">
               {task.variationLabel && (
