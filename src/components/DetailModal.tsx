@@ -6,7 +6,7 @@ import { formatImageRatio } from '../lib/size'
 import { ActualValueBadge, DetailParamValue } from '../lib/paramDisplay'
 import { copyBlobToClipboard, copyTextToClipboard, getClipboardFailureMessage } from '../lib/clipboard'
 import { createMaskPreviewDataUrl } from '../lib/canvasImage'
-import { getPrimaryDiagnostic, getTaskFailureSummary } from '../lib/taskDiagnostics'
+import { getPrimaryDiagnostic, getTaskFailureDetail, getTaskFailureSummary } from '../lib/taskDiagnostics'
 
 export default function DetailModal() {
   const tasks = useStore((s) => s.tasks)
@@ -252,7 +252,7 @@ export default function DetailModal() {
   }
 
   const handleCopyError = async () => {
-    const errorText = task.error || '生成失败'
+    const errorText = getTaskFailureDetail(task)
     try {
       await copyTextToClipboard(errorText)
       showToast('完整报错已复制', 'success')

@@ -21,7 +21,15 @@ The Vite dev server proxies `/api/*` to `http://127.0.0.1:8000`.
 - `GIP_DATA_DIR`: local data directory, defaults to `backend/data`.
 - `GIP_DATABASE_PATH`: SQLite path, defaults to `backend/data/app.sqlite3`.
 - `GIP_ASSET_DIR`: uploaded/generated asset directory, defaults to `backend/data/assets`.
+- `GIP_RESTORE_POINT_DIR`: automatic restore-point archive directory, defaults to `backend/data/restore-points`.
+- `GIP_FRONTEND_DIST_DIR`: built frontend bundle directory served as SPA fallback, defaults to `<repo>/dist`.
+- `GIP_SESSION_COOKIE`: session cookie name, defaults to `gip_session`.
 - `GIP_SESSION_SECURE`: set to `true` behind HTTPS.
+- `GIP_SESSION_TTL_SECONDS`: session lifetime in seconds, defaults to `604800` (7 days).
+- `GIP_RESTORE_POINT_RETENTION`: how many automatic restore-point archives to keep, defaults to `10`.
+- `GIP_MAX_UPLOAD_BYTES`: per-request upload size cap in bytes, defaults to `26214400` (25 MiB).
+- `GIP_THUMBNAIL_MAX_SIZE`: generated thumbnail longest-edge in pixels, defaults to `512`.
+- `GIP_CORS_ORIGINS`: comma-separated allowed CORS origins, defaults to `http://127.0.0.1:5173,http://localhost:5173`.
 
 Upstream Base URL, API Key, request timeout, and model availability are configured by administrator accounts through `/api/admin/channels`; they are not accepted from normal browser generation requests.
 

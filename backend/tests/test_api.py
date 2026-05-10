@@ -596,11 +596,11 @@ Run `pip install deer-flow`, then launch the local service with `docker compose 
 
 def test_asset_upload_read_delete(monkeypatch, tmp_path):
     client = make_client(monkeypatch, tmp_path)
-    import backend.app.main as main
+    import backend.app.routes.assets as assets_mod
 
     register(client)
     copied_paths: list[str] = []
-    monkeypatch.setattr(main, "copy_image_file_to_system_clipboard", lambda path: copied_paths.append(str(path)))
+    monkeypatch.setattr(assets_mod, "copy_image_file_to_system_clipboard", lambda path: copied_paths.append(str(path)))
 
     upload = client.post(
         "/api/assets",
@@ -648,7 +648,7 @@ def test_async_generation_run_persists_task_assets_and_metadata(monkeypatch, tmp
             ["A revised studio prompt"],
         )
 
-    monkeypatch.setattr(main, "call_upstream", fake_call_upstream)
+    monkeypatch.setattr("backend.app.routes.generations.call_upstream", fake_call_upstream)
 
     payload = {
         "channelId": channel["id"],
@@ -693,7 +693,7 @@ def test_delete_generation_removes_orphan_assets(monkeypatch, tmp_path):
             ["A revised studio prompt"],
         )
 
-    monkeypatch.setattr(main, "call_upstream", fake_call_upstream)
+    monkeypatch.setattr("backend.app.routes.generations.call_upstream", fake_call_upstream)
 
     generated = client.post(
         "/api/generate",
@@ -864,6 +864,9 @@ def test_reviewer_can_review_templates_but_cannot_manage_system(monkeypatch, tmp
 
 
 def test_queued_generation_survives_restart_and_rehydrates_inputs(monkeypatch, tmp_path):
+    import backend.app.routes.generations as generations
+    _real_ensure_workers = generations.ensure_generation_workers
+
     with make_client(monkeypatch, tmp_path) as client:
         import backend.app.main as main
 
@@ -873,7 +876,7 @@ def test_queued_generation_survives_restart_and_rehydrates_inputs(monkeypatch, t
         for task in list(main.GENERATION_RUNTIME.worker_tasks):
             task.cancel()
         main.GENERATION_RUNTIME.worker_tasks.clear()
-        monkeypatch.setattr(main, "ensure_generation_workers", lambda: None)
+        monkeypatch.setattr("backend.app.routes.generations.ensure_generation_workers", lambda: None)
 
         payload = {
             "channelId": channel["id"],
@@ -889,6 +892,9 @@ def test_queued_generation_survives_restart_and_rehydrates_inputs(monkeypatch, t
         assert queued["status"] == "queued"
         assert len(queued["inputImageIds"]) == 1
         task_id = queued["id"]
+
+    # Restore real ensure_generation_workers so the second make_client starts workers
+    monkeypatch.setattr("backend.app.routes.generations.ensure_generation_workers", _real_ensure_workers)
 
     class FakeAsyncClient:
         def __init__(self, timeout):
@@ -1092,13 +1098,51 @@ def test_channel_compatibility_check_detects_standard_and_is_public(monkeypatch,
     assert any(item["action"] == "channel.compatibility_check" for item in logs)
 
 
+def test_generation_diagnostics_surface_upstream_error_message(monkeypatch, tmp_path):
+    make_client(monkeypatch, tmp_path)
+    from backend.app.routes.generations import classify_generation_exception
+
+    request = httpx.Request("POST", "https://example.test/v1/images/generations")
+    response = httpx.Response(
+        400,
+        json={"error": {"message": "Prompt blocked by upstream reviewer", "code": "content_policy_violation"}},
+        request=request,
+    )
+    exc = httpx.HTTPStatusError("400 Client Error", request=request, response=response)
+
+    error_message, diagnostics = classify_generation_exception(exc)
+
+    assert diagnostics[0].code == "policy_rejected"
+    assert diagnostics[0].title == "上游拒绝生成"
+    assert "Prompt blocked by upstream reviewer" in diagnostics[0].detail
+    assert "Prompt blocked by upstream reviewer" in error_message
+
+
+def test_generation_diagnostics_surface_connection_reset(monkeypatch, tmp_path):
+    make_client(monkeypatch, tmp_path)
+    from backend.app.routes.generations import classify_generation_exception
+
+    request = httpx.Request("POST", "https://example.test/v1/images/generations")
+    exc = httpx.ConnectError(
+        "[WinError 10054] 远程主机强迫关闭了一个现有的连接。",
+        request=request,
+    )
+
+    error_message, diagnostics = classify_generation_exception(exc)
+
+    assert diagnostics[0].code == "upstream_connection_reset"
+    assert diagnostics[0].title == "上游连接被重置"
+    assert "10054" in diagnostics[0].detail
+    assert "10054" in error_message
+
+
 def test_queued_generation_can_be_canceled(monkeypatch, tmp_path):
     client = make_client(monkeypatch, tmp_path)
     import backend.app.main as main
 
     register(client)
     channel = create_channel(client)
-    monkeypatch.setattr(main, "ensure_generation_workers", lambda: None)
+    monkeypatch.setattr("backend.app.routes.generations.ensure_generation_workers", lambda: None)
 
     payload = {
         "channelId": channel["id"],
@@ -1221,7 +1265,7 @@ def test_template_gallery_versions_rating_pack_similarity_and_leaderboard(monkey
             ["A revised studio prompt"],
         )
 
-    monkeypatch.setattr(main, "call_upstream", fake_call_upstream)
+    monkeypatch.setattr("backend.app.routes.generations.call_upstream", fake_call_upstream)
     generated = client.post(
         "/api/generate",
         json={

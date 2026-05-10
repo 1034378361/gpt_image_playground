@@ -19,6 +19,16 @@ export function getTaskFailureSummary(task: TaskRecord): string {
   return '生成失败'
 }
 
+export function getTaskFailureDetail(task: TaskRecord): string {
+  const diagnostic = getPrimaryDiagnostic(task)
+  if (diagnostic) {
+    const parts = [diagnostic.title?.trim(), diagnostic.detail?.trim(), diagnostic.hint?.trim()].filter(Boolean)
+    if (parts.length > 0) return parts.join('\n')
+  }
+  if (task.error?.trim()) return task.error.trim()
+  return '生成失败'
+}
+
 export function getTaskQueuePosition(tasks: TaskRecord[], taskId: string): number | null {
   const queued = [...tasks]
     .filter((task) => task.status === 'queued')

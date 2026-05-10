@@ -81,8 +81,15 @@ export function clearTemplates(): Promise<undefined> {
 
 // ===== Images =====
 
-export function getImage(id: string): Promise<StoredImage | undefined> {
-  return dbTransaction(STORE_IMAGES, 'readonly', (s) => s.get(id))
+const IMAGE_CACHE_MAX = 200
+
+export async function getImage(id: string): Promise<StoredImage | undefined> {
+  const image = await dbTransaction(STORE_IMAGES, 'readonly', (s) => s.get(id)) as StoredImage | undefined
+  if (image) {
+    image.lastAccessedAt = Date.now()
+    void dbTransaction(STORE_IMAGES, 'readwrite', (s) => s.put(image))
+  }
+  return image
 }
 
 export function getAllImages(): Promise<StoredImage[]> {
@@ -90,7 +97,7 @@ export function getAllImages(): Promise<StoredImage[]> {
 }
 
 export function putImage(image: StoredImage): Promise<IDBValidKey> {
-  return dbTransaction(STORE_IMAGES, 'readwrite', (s) => s.put(image))
+  return dbTransaction(STORE_IMAGES, 'readwrite', (s) => s.put({ ...image, lastAccessedAt: image.lastAccessedAt ?? Date.now() }))
 }
 
 export function deleteImage(id: string): Promise<undefined> {
@@ -99,6 +106,21 @@ export function deleteImage(id: string): Promise<undefined> {
 
 export function clearImages(): Promise<undefined> {
   return dbTransaction(STORE_IMAGES, 'readwrite', (s) => s.clear())
+}
+
+export async function evictOldImages(referencedIds: Set<string>): Promise<number> {
+  const all = await getAllImages()
+  if (all.length <= IMAGE_CACHE_MAX) return 0
+
+  const evictable = all
+    .filter((img) => img.source === 'generated' && !referencedIds.has(img.id))
+    .sort((a, b) => (a.lastAccessedAt ?? a.createdAt ?? 0) - (b.lastAccessedAt ?? b.createdAt ?? 0))
+
+  const toEvict = evictable.slice(0, all.length - IMAGE_CACHE_MAX)
+  for (const img of toEvict) {
+    await deleteImage(img.id)
+  }
+  return toEvict.length
 }
 
 // ===== Image hashing & dedup =====

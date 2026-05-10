@@ -1,14 +1,13 @@
 import { useRef, useEffect, useCallback, useState, useMemo } from 'react'
-import { useStore, addImageFromFile, updateTaskInStore, removeMultipleTasks, selectChannelModel, optimizeCurrentPrompt } from '../store'
+import { useStore, addImageFromFile, updateTaskInStore, removeMultipleTasks, selectChannelModel, optimizeCurrentPrompt, ensureImageCached } from '../store'
 import { refreshGenerationPreflight, submitTask } from '../storeBackend'
 import { DEFAULT_PARAMS } from '../types'
-import { normalizeImageSize } from '../lib/size'
 import { createMaskPreviewDataUrl } from '../lib/canvasImage'
-import { compatibilityStatusLabel, healthStatusLabel } from '../lib/channelHealth'
 import { canManageSystem } from '../lib/roles'
-import Select from './Select'
 import SizePickerModal from './SizePickerModal'
 import ExperimentLabModal from './ExperimentLabModal'
+import ComposerParams from './ComposerParams'
+import ComposerImages from './ComposerImages'
 
 /** 通用悬浮气泡提示 */
 function ButtonTooltip({ visible, text }: { visible: boolean; text: string }) {
@@ -131,6 +130,34 @@ export default function InputBar() {
       },
     })
   }, [selectedTaskIds, setConfirmDialog])
+
+  const handleDownloadSelected = useCallback(async () => {
+    const selectedTasks = tasks.filter((t) => selectedTaskIds.includes(t.id))
+    const imageIds = selectedTasks.flatMap((t) => t.outputImages || [])
+    if (imageIds.length === 0) {
+      showToast('选中的任务没有生成图片', 'error')
+      return
+    }
+    showToast(`开始下载 ${imageIds.length} 张图片...`, 'info')
+    for (const imgId of imageIds) {
+      try {
+        const dataUrl = await ensureImageCached(imgId)
+        if (!dataUrl) continue
+        const res = await fetch(dataUrl)
+        const blob = await res.blob()
+        const url = URL.createObjectURL(blob)
+        const a = document.createElement('a')
+        a.href = url
+        const ext = blob.type.split('/')[1] || 'png'
+        a.download = `${imgId}.${ext}`
+        document.body.appendChild(a)
+        a.click()
+        document.body.removeChild(a)
+        URL.revokeObjectURL(url)
+      } catch { /* skip failed downloads */ }
+    }
+    showToast(`已下载 ${imageIds.length} 张图片`, 'success')
+  }, [tasks, selectedTaskIds, showToast])
 
   const handleSaveCurrentTemplate = useCallback(() => {
     if (!prompt.trim()) {
@@ -627,294 +654,20 @@ export default function InputBar() {
 
   const selectClass = 'px-3 py-1.5 rounded-xl border border-gray-200/60 dark:border-white/[0.08] bg-white/50 dark:bg-white/[0.03] hover:bg-white dark:hover:bg-white/[0.06] text-xs transition-all duration-200 shadow-sm'
 
-  const renderImageThumb = (img: (typeof inputImages)[number]) => {
-    const originalIndex = inputImages.findIndex((i) => i.id === img.id)
-    const isMaskTarget = maskDraft?.targetImageId === img.id
-    const canEdit = !maskTargetImage || isMaskTarget
-    const displaySrc = isMaskTarget && maskPreviewUrl ? maskPreviewUrl : img.dataUrl
-
-    return (
-      <div key={img.id} className="relative group inline-block">
-        <div 
-          className={`relative w-[52px] h-[52px] rounded-xl overflow-hidden border shadow-sm cursor-pointer ${
-            isMaskTarget ? 'border-blue-500 border-2' : 'border-gray-200 dark:border-white/[0.08]'
-          }`}
-          onClick={() => setLightboxImageId(img.id, inputImages.map((i) => i.id))}
-        >
-          <img
-            src={displaySrc}
-            className="w-full h-full object-cover hover:opacity-90 transition-opacity"
-            alt=""
-          />
-          {isMaskTarget && (
-            <span className="absolute left-1 top-1 rounded bg-blue-500/90 px-1.5 py-0.5 text-[8px] leading-none text-white font-bold tracking-wider backdrop-blur-sm z-10 pointer-events-none">
-              MASK
-            </span>
-          )}
-          {canEdit && (
-            <button 
-              className="absolute inset-0 w-full h-full bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center cursor-pointer z-20 focus:outline-none border-none"
-              onClick={(e) => {
-                e.stopPropagation()
-                setMaskEditorImageId(img.id)
-              }}
-              title={isMaskTarget ? "编辑遮罩" : "添加遮罩"}
-            >
-              <svg className="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
-              </svg>
-            </button>
-          )}
-        </div>
-        <span
-          className="absolute -top-2 -right-2 w-[22px] h-[22px] rounded-full bg-red-500 text-white flex items-center justify-center cursor-pointer opacity-0 group-hover:opacity-100 transition-opacity shadow-md hover:bg-red-600 z-30"
-          onClick={(e) => {
-            e.stopPropagation()
-            if (originalIndex >= 0) removeInputImage(originalIndex)
-          }}
-        >
-          <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M6 18L18 6M6 6l12 12" />
-          </svg>
-        </span>
-      </div>
-    )
-  }
-
-  const renderClearAllButton = () => (
-    <button
-      onClick={() =>
-        setConfirmDialog({
-          title: maskTargetImage ? '清空全部输入图' : '清空参考图',
-          message: maskTargetImage
-            ? `确定要清空遮罩主图、${referenceImages.length} 张参考图和当前遮罩吗？`
-            : `确定要清空全部 ${inputImages.length} 张参考图吗？`,
-          action: () => clearInputImages(),
-        })
-      }
-      className="w-[52px] h-[52px] rounded-xl border border-dashed border-gray-300 dark:border-white/[0.08] flex flex-col items-center justify-center gap-0.5 text-gray-400 dark:text-gray-500 hover:text-red-500 hover:border-red-300 hover:bg-red-50/50 dark:hover:bg-red-950/30 transition-all cursor-pointer flex-shrink-0"
-      title={maskTargetImage ? '清空遮罩主图、参考图和遮罩' : '清空全部参考图'}
-    >
-      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-      </svg>
-      <span className="text-[8px] leading-none">{maskTargetImage ? '清空全部' : '清空'}</span>
-    </button>
-  )
-
-  const renderImageThumbs = () => {
-    return (
-      <div ref={imagesRef}>
-        <div className="grid grid-cols-[repeat(auto-fill,52px)] justify-between gap-x-2 gap-y-3 mb-3">
-          {inputImages.map((img) => renderImageThumb(img))}
-          {renderClearAllButton()}
-        </div>
-      </div>
-    )
-  }
-
-  const labelClass = 'text-gray-400 dark:text-gray-500 ml-1'
-
-  const renderChannelField = () => (
-    <label className="flex flex-col gap-0.5">
-      <span className={labelClass}>渠道</span>
-      <Select
-        value={settings.channelId || '__none__'}
-        onChange={(value) => {
-          if (value === '__none__') {
-            handleMissingGenerationConfig()
-            return
-          }
-          selectChannelModel(String(value))
-        }}
-        options={
-          channels.length
-            ? channels.map((channel) => ({
-                label: `${channel.name} · ${healthStatusLabel(channel.healthStatus)} · ${compatibilityStatusLabel(channel.compatibilityStatus)}`,
-                value: channel.id,
-              }))
-            : [{ label: missingChannelMessage, value: '__none__' }]
-        }
-        className={selectClass}
-      />
-    </label>
-  )
-
-  const renderModelField = () => (
-    <label className="flex flex-col gap-0.5">
-      <span className={labelClass}>模型</span>
-      <Select
-        value={settings.model || '__none__'}
-        onChange={(value) => {
-          if (!settings.channelId || value === '__none__') return
-          selectChannelModel(settings.channelId, String(value))
-        }}
-        options={
-          enabledModels.length
-            ? enabledModels.map((model) => ({ label: model.label || model.id, value: model.id }))
-            : [{ label: currentChannel ? '当前渠道暂无可用模型' : '请先选择渠道', value: '__none__' }]
-        }
-        className={selectClass}
-        disabled={!currentChannel || !enabledModels.length}
-      />
-    </label>
-  )
-
-  const renderSizeField = () => (
-    <label className="flex flex-col gap-0.5">
-      <span className={labelClass}>尺寸</span>
-      <button
-        type="button"
-        onClick={() => setShowSizePicker(true)}
-        className="px-3 py-1.5 rounded-xl border border-gray-200/60 dark:border-white/[0.08] bg-white/50 dark:bg-white/[0.03] hover:bg-white dark:hover:bg-white/[0.06] focus:outline-none text-xs text-left transition-all duration-200 shadow-sm font-mono"
-        title="选择尺寸"
-      >
-        {normalizeImageSize(params.size) || DEFAULT_PARAMS.size}
-      </button>
-    </label>
-  )
-
-  const renderQualityField = () => (
-    <label
-      className="relative flex flex-col gap-0.5"
-      onMouseEnter={showQualityHint}
-      onMouseLeave={hideQualityHint}
-      onTouchStart={startQualityHintTouch}
-      onTouchEnd={clearQualityHintTimer}
-      onTouchCancel={hideQualityHint}
-      onClick={showQualityHint}
-    >
-      <span className={labelClass}>质量</span>
-      <Select
-        value={settings.codexCli ? 'auto' : params.quality}
-        onChange={(val) => {
-          if (!settings.codexCli) setParams({ quality: val as any })
-        }}
-        options={[
-          { label: 'auto', value: 'auto' },
-          { label: 'low', value: 'low' },
-          { label: 'medium', value: 'medium' },
-          { label: 'high', value: 'high' },
-        ]}
-        disabled={settings.codexCli}
-        className={settings.codexCli
-          ? 'px-3 py-1.5 rounded-xl border border-gray-200/60 dark:border-white/[0.08] bg-gray-100/50 dark:bg-white/[0.05] opacity-50 cursor-not-allowed text-xs transition-all duration-200 shadow-sm'
-          : selectClass}
-      />
-      <ButtonTooltip
-        visible={settings.codexCli && qualityHintVisible}
-        text="Codex CLI 不支持质量参数"
-      />
-    </label>
-  )
-
-  const renderFormatField = () => (
-    <label className="flex flex-col gap-0.5">
-      <span className={labelClass}>格式</span>
-      <Select
-        value={params.output_format}
-        onChange={(val) => setParams({ output_format: val as any })}
-        options={[
-          { label: 'PNG', value: 'png' },
-          { label: 'JPEG', value: 'jpeg' },
-          { label: 'WebP', value: 'webp' },
-        ]}
-        className={selectClass}
-      />
-    </label>
-  )
-
-  const renderCompressionField = () => (
-    <label
-      className="relative flex flex-col gap-0.5"
-      onMouseEnter={showCompressionHint}
-      onMouseLeave={hideCompressionHint}
-      onTouchStart={startCompressionHintTouch}
-      onTouchEnd={clearCompressionHintTimer}
-      onTouchCancel={hideCompressionHint}
-      onClick={showCompressionHint}
-    >
-      <span className={labelClass}>压缩率</span>
-      <input
-        value={outputCompressionInput}
-        onChange={(e) => setOutputCompressionInput(e.target.value)}
-        onBlur={commitOutputCompression}
-        disabled={params.output_format === 'png'}
-        type="number"
-        min={0}
-        max={100}
-        placeholder="0-100"
-        className={`px-3 py-1.5 rounded-xl border border-gray-200/60 dark:border-white/[0.08] focus:outline-none text-xs transition-all duration-200 shadow-sm ${
-          params.output_format === 'png'
-            ? 'bg-gray-100/50 dark:bg-white/[0.05] opacity-50 cursor-not-allowed'
-            : 'bg-white/50 dark:bg-white/[0.03]'
-          }`}
-      />
-      <ButtonTooltip
-        visible={compressionHintVisible}
-        text="仅 JPEG 和 WebP 支持压缩率"
-      />
-    </label>
-  )
-
-  const renderModerationField = () => (
-    <label
-      className="relative flex flex-col gap-0.5"
-      onMouseEnter={showModerationHint}
-      onMouseLeave={hideModerationHint}
-      onTouchStart={startModerationHintTouch}
-      onTouchEnd={clearModerationHintTimer}
-      onTouchCancel={hideModerationHint}
-      onClick={showModerationHint}
-    >
-      <span className={labelClass}>审核</span>
-      <Select
-        value={settings.apiMode === 'responses' ? 'auto' : params.moderation}
-        onChange={(val) => {
-          if (settings.apiMode !== 'responses') setParams({ moderation: val as any })
-        }}
-        options={[
-          { label: 'auto', value: 'auto' },
-          { label: 'low', value: 'low' },
-        ]}
-        disabled={settings.apiMode === 'responses'}
-        className={settings.apiMode === 'responses'
-          ? 'px-3 py-1.5 rounded-xl border border-gray-200/60 dark:border-white/[0.08] bg-gray-100/50 dark:bg-white/[0.05] opacity-50 cursor-not-allowed text-xs transition-all duration-200 shadow-sm'
-          : selectClass}
-      />
-      <ButtonTooltip
-        visible={settings.apiMode === 'responses' && moderationHintVisible}
-        text="Responses API 不支持审核参数"
-      />
-    </label>
-  )
-
-  const renderCountField = () => (
-    <label className="flex flex-col gap-0.5">
-      <span className={labelClass}>数量</span>
-      <input
-        value={nInput}
-        onChange={(e) => setNInput(e.target.value)}
-        onBlur={commitN}
-        type="number"
-        min={1}
-        max={4}
-        className="px-3 py-1.5 rounded-xl border border-gray-200/60 dark:border-white/[0.08] bg-white/50 dark:bg-white/[0.03] focus:outline-none text-xs transition-all duration-200 shadow-sm"
-      />
-    </label>
-  )
-
-  const renderMobileParams = () => (
-    <div className="grid grid-cols-2 gap-2 text-xs flex-1">
-      {renderChannelField()}
-      {renderModelField()}
-      {renderSizeField()}
-      {renderQualityField()}
-      {renderFormatField()}
-      {renderCompressionField()}
-      {renderModerationField()}
-      {renderCountField()}
-    </div>
+  const composerImagesElement = (
+    <ComposerImages
+      inputImages={inputImages}
+      removeInputImage={removeInputImage}
+      clearInputImages={clearInputImages}
+      maskDraft={maskDraft}
+      maskPreviewUrl={maskPreviewUrl}
+      setMaskEditorImageId={setMaskEditorImageId}
+      setLightboxImageId={setLightboxImageId}
+      setConfirmDialog={setConfirmDialog}
+      maskTargetImage={maskTargetImage}
+      referenceImages={referenceImages}
+      imagesRef={imagesRef}
+    />
   )
 
   return (
@@ -1053,6 +806,16 @@ export default function InputBar() {
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
                     </svg>
                   </button>
+                  <div className="w-px h-5 bg-white/20 mx-1"></div>
+                  <button
+                    onClick={handleDownloadSelected}
+                    className="p-2 text-green-400 hover:text-green-300 transition-colors"
+                    title="下载选中图片"
+                  >
+                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                    </svg>
+                  </button>
                 </div>
               </div>
             )}
@@ -1072,7 +835,7 @@ export default function InputBar() {
               <>
                 <div className={`collapse-section${mobileCollapsed ? ' collapsed' : ''}`}>
                   <div className="collapse-inner">
-                    {renderImageThumbs()}
+                    {composerImagesElement}
                   </div>
                 </div>
                 {mobileCollapsed && (
@@ -1082,7 +845,7 @@ export default function InputBar() {
                 )}
               </>
             ) : (
-              renderImageThumbs()
+              composerImagesElement
             )
           )}
 
@@ -1195,19 +958,43 @@ export default function InputBar() {
           <div className="mt-3">
             {/* 桌面端布局 */}
             <div className="hidden sm:flex flex-col gap-3">
-              <div className="grid grid-cols-2 gap-2 text-xs lg:grid-cols-[minmax(0,1.45fr)_minmax(0,1.45fr)_minmax(140px,1fr)_minmax(96px,0.7fr)]">
-                {renderChannelField()}
-                {renderModelField()}
-                {renderSizeField()}
-                {renderCountField()}
-              </div>
-
-              <div className="grid grid-cols-2 gap-2 text-xs xl:grid-cols-4">
-                {renderQualityField()}
-                {renderFormatField()}
-                {renderCompressionField()}
-                {renderModerationField()}
-              </div>
+              <ComposerParams
+                settings={settings}
+                params={params}
+                setParams={setParams}
+                channels={channels}
+                currentChannel={currentChannel}
+                enabledModels={enabledModels}
+                selectChannelModel={selectChannelModel}
+                codexCli={settings.codexCli}
+                showSizePicker={showSizePicker}
+                setShowSizePicker={setShowSizePicker}
+                compressionHintVisible={compressionHintVisible}
+                moderationHintVisible={moderationHintVisible}
+                qualityHintVisible={qualityHintVisible}
+                showCompressionHint={showCompressionHint}
+                hideCompressionHint={hideCompressionHint}
+                startCompressionHintTouch={startCompressionHintTouch}
+                clearCompressionHintTimer={clearCompressionHintTimer}
+                showModerationHint={showModerationHint}
+                hideModerationHint={hideModerationHint}
+                startModerationHintTouch={startModerationHintTouch}
+                clearModerationHintTimer={clearModerationHintTimer}
+                showQualityHint={showQualityHint}
+                hideQualityHint={hideQualityHint}
+                startQualityHintTouch={startQualityHintTouch}
+                clearQualityHintTimer={clearQualityHintTimer}
+                outputCompressionInput={outputCompressionInput}
+                setOutputCompressionInput={setOutputCompressionInput}
+                commitOutputCompression={commitOutputCompression}
+                nInput={nInput}
+                setNInput={setNInput}
+                commitN={commitN}
+                handleMissingGenerationConfig={handleMissingGenerationConfig}
+                selectClass={selectClass}
+                missingChannelMessage={missingChannelMessage}
+                variant="desktop"
+              />
 
               <div className="flex flex-wrap items-center justify-between gap-2.5 rounded-xl border border-gray-200/60 bg-white/35 px-2.5 py-2 dark:border-white/[0.08] dark:bg-white/[0.02]">
                 <div className="flex flex-wrap items-center gap-2">
@@ -1287,7 +1074,43 @@ export default function InputBar() {
             <div className="sm:hidden flex flex-col gap-2">
               <div className={`collapse-section${mobileCollapsed ? ' collapsed' : ''}`}>
                 <div className="collapse-inner">
-                  {renderMobileParams()}
+                  <ComposerParams
+                    settings={settings}
+                    params={params}
+                    setParams={setParams}
+                    channels={channels}
+                    currentChannel={currentChannel}
+                    enabledModels={enabledModels}
+                    selectChannelModel={selectChannelModel}
+                    codexCli={settings.codexCli}
+                    showSizePicker={showSizePicker}
+                    setShowSizePicker={setShowSizePicker}
+                    compressionHintVisible={compressionHintVisible}
+                    moderationHintVisible={moderationHintVisible}
+                    qualityHintVisible={qualityHintVisible}
+                    showCompressionHint={showCompressionHint}
+                    hideCompressionHint={hideCompressionHint}
+                    startCompressionHintTouch={startCompressionHintTouch}
+                    clearCompressionHintTimer={clearCompressionHintTimer}
+                    showModerationHint={showModerationHint}
+                    hideModerationHint={hideModerationHint}
+                    startModerationHintTouch={startModerationHintTouch}
+                    clearModerationHintTimer={clearModerationHintTimer}
+                    showQualityHint={showQualityHint}
+                    hideQualityHint={hideQualityHint}
+                    startQualityHintTouch={startQualityHintTouch}
+                    clearQualityHintTimer={clearQualityHintTimer}
+                    outputCompressionInput={outputCompressionInput}
+                    setOutputCompressionInput={setOutputCompressionInput}
+                    commitOutputCompression={commitOutputCompression}
+                    nInput={nInput}
+                    setNInput={setNInput}
+                    commitN={commitN}
+                    handleMissingGenerationConfig={handleMissingGenerationConfig}
+                    selectClass={selectClass}
+                    missingChannelMessage={missingChannelMessage}
+                    variant="mobile"
+                  />
                   <div className="h-2" />
                 </div>
               </div>

@@ -16,7 +16,8 @@ const TemplateDetailModal = lazy(() => import('./components/TemplateDetailModal'
 const TemplateEditorModal = lazy(() => import('./components/TemplateEditorModal'))
 const ProjectManagerModal = lazy(() => import('./components/ProjectManagerModal'))
 const Lightbox = lazy(() => import('./components/Lightbox'))
-const SettingsModal = lazy(() => import('./components/SettingsModal'))
+const AdminConsoleModal = lazy(() => import('./components/AdminConsoleModal'))
+const UserSettingsModal = lazy(() => import('./components/UserSettingsModal'))
 const ConfirmDialog = lazy(() => import('./components/ConfirmDialog'))
 const MaskEditorModal = lazy(() => import('./components/MaskEditorModal'))
 const ImageContextMenu = lazy(() => import('./components/ImageContextMenu'))
@@ -41,10 +42,26 @@ export default function App() {
   const backendReady = useStore((s) => s.backendReady)
   const backendUser = useStore((s) => s.backendUser)
   const backendUnavailableReason = useStore((s) => s.backendUnavailableReason)
+  const theme = useStore((s) => s.theme)
 
   useEffect(() => {
     void initStore()
   }, [])
+
+  useEffect(() => {
+    const root = document.documentElement
+    if (theme === 'dark') {
+      root.classList.add('dark')
+    } else if (theme === 'light') {
+      root.classList.remove('dark')
+    } else {
+      const mq = window.matchMedia('(prefers-color-scheme: dark)')
+      const apply = () => mq.matches ? root.classList.add('dark') : root.classList.remove('dark')
+      apply()
+      mq.addEventListener('change', apply)
+      return () => mq.removeEventListener('change', apply)
+    }
+  }, [theme])
 
   useEffect(() => {
     const preventPageImageDrag = (e: DragEvent) => {
@@ -55,6 +72,22 @@ export default function App() {
 
     document.addEventListener('dragstart', preventPageImageDrag)
     return () => document.removeEventListener('dragstart', preventPageImageDrag)
+  }, [])
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement | null
+      const isInput = target?.tagName === 'INPUT' || target?.tagName === 'TEXTAREA' || target?.isContentEditable
+
+      if (e.key === '/' && !isInput && !e.ctrlKey && !e.metaKey) {
+        e.preventDefault()
+        const searchInput = document.querySelector<HTMLInputElement>('[data-search-input]')
+        searchInput?.focus()
+      }
+    }
+
+    document.addEventListener('keydown', handleKeyDown)
+    return () => document.removeEventListener('keydown', handleKeyDown)
   }, [])
 
   useEffect(() => {
@@ -150,7 +183,8 @@ export default function App() {
         <TemplateEditorModal />
         <ProjectManagerModal />
         <Lightbox />
-        <SettingsModal />
+        <UserSettingsModal />
+        <AdminConsoleModal />
         <ConfirmDialog />
       </Suspense>
       <Toast />

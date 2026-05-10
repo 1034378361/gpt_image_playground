@@ -512,6 +512,32 @@ export function cancelGeneration(settings: AppSettings, taskId: string): Promise
   return request(settings, `/generations/${taskId}/cancel`, { method: 'POST' })
 }
 
+export function streamGeneration(
+  taskId: string,
+  onUpdate: (task: TaskRecord) => void,
+  onError: (err: Error) => void,
+): () => void {
+  const url = `${apiBase()}/generations/${taskId}/stream`
+  const eventSource = new EventSource(url, { withCredentials: true } as EventSourceInit)
+
+  eventSource.addEventListener('status', (e: MessageEvent) => {
+    try {
+      const task = JSON.parse(e.data) as TaskRecord
+      onUpdate(task)
+    } catch (err) {
+      onError(err instanceof Error ? err : new Error(String(err)))
+      eventSource.close()
+    }
+  })
+
+  eventSource.onerror = () => {
+    eventSource.close()
+    onError(new Error('SSE connection lost'))
+  }
+
+  return () => eventSource.close()
+}
+
 export async function getAssetDataUrl(settings: AppSettings, assetId: string): Promise<string> {
   const response = await fetch(`${apiBase()}/assets/${assetId}`, {
     credentials: 'include',

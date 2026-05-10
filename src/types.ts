@@ -507,6 +507,8 @@ export interface StoredImage {
   dataUrl: string
   /** 图片首次存储时间（ms） */
   createdAt?: number
+  /** 最近一次访问时间（ms），用于 LRU 淘汰 */
+  lastAccessedAt?: number
   /** 图片来源：用户上传 / API 生成 / 遮罩 */
   source?: 'upload' | 'generated' | 'mask'
 }

@@ -5,6 +5,7 @@ backend/.venv/
 backend/dev-server*.log
 .backend-dev*.log
 .vite-dev*.log
+.codex-logs/
 *.pyc
 __pycache__/
 *.tar

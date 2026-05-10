@@ -138,6 +138,8 @@ interface AppState {
   setPrompt: (p: string) => void
   composerClearMode: 'prompt_only' | 'prompt_and_images' | 'keep_all'
   setComposerClearMode: (mode: AppState['composerClearMode']) => void
+  theme: 'system' | 'light' | 'dark'
+  setTheme: (theme: AppState['theme']) => void
   inputImages: InputImage[]
   addInputImage: (img: InputImage) => void
   removeInputImage: (idx: number) => void
@@ -202,6 +204,8 @@ interface AppState {
   setShowProjectManager: (show: boolean) => void
   showSettings: boolean
   setShowSettings: (v: boolean) => void
+  showUserSettings: boolean
+  setShowUserSettings: (v: boolean) => void
 
   // Toast
   toast: { message: string; type: 'info' | 'success' | 'error' } | null
@@ -291,6 +295,8 @@ export const useStore = create<AppState>()(
       setPrompt: (prompt) => set({ prompt }),
       composerClearMode: 'prompt_only',
       setComposerClearMode: (composerClearMode) => set({ composerClearMode }),
+      theme: 'system',
+      setTheme: (theme) => set({ theme }),
       inputImages: [],
       addInputImage: (img) =>
         set((s) => {
@@ -395,6 +401,8 @@ export const useStore = create<AppState>()(
       setShowProjectManager: (showProjectManager) => set({ showProjectManager }),
       showSettings: false,
       setShowSettings: (showSettings) => set({ showSettings }),
+      showUserSettings: false,
+      setShowUserSettings: (showUserSettings) => set({ showUserSettings }),
 
       // Toast
       toast: null,
@@ -415,6 +423,7 @@ export const useStore = create<AppState>()(
         settings: state.settings,
         params: state.params,
         composerClearMode: state.composerClearMode,
+        theme: state.theme,
         dismissedCodexCliPrompts: state.dismissedCodexCliPrompts,
       }),
     },

@@ -3,6 +3,7 @@ import type {
   AdminApiChannel,
   ApiChannel,
   ApiChannelDraft,
+  AppSettings,
   AutoImportRun,
   AutoImportSettings,
   AutoImportSettingsPatch,
@@ -22,6 +23,7 @@ import type {
 import { DEFAULT_PARAMS } from './types'
 import {
   deleteImage,
+  evictOldImages,
   getAllImages,
   getAllTasks,
   getAllTemplates,
@@ -104,6 +106,8 @@ export async function initStore() {
       await deleteImage(img.id)
     }
   }
+
+  void evictOldImages(referencedIds)
 
   await loadBackendSession({ silent: true })
 }
@@ -271,9 +275,22 @@ async function queuePreparedTask(
 
 function clearComposerAfterTaskQueued() {
   const state = useStore.getState()
+  const mode = state.composerClearMode
+
+  if (mode === 'keep_all') {
+    state.setGenerationPreflight(null)
+    state.setPendingParentTaskId(null)
+    return
+  }
+
   state.setPrompt('')
   state.setGenerationPreflight(null)
   state.setPendingParentTaskId(null)
+
+  if (mode === 'prompt_and_images') {
+    state.clearInputImages()
+    state.clearMaskDraft()
+  }
 }
 
 export async function submitTask(options: { allowFullMask?: boolean } = {}) {
@@ -337,6 +354,71 @@ export async function refreshGenerationPreflight() {
   }
 }
 
+function waitForTaskCompletion(taskId: string, timeoutSeconds: number): Promise<TaskRecord> {
+  const { settings } = useStore.getState()
+  const deadline = Date.now() + Math.max(30_000, timeoutSeconds * 1000 + 15_000)
+
+  return new Promise<TaskRecord>((resolve, reject) => {
+    let settled = false
+    let lastTask: TaskRecord | null = null
+
+    const settle = () => {
+      if (settled) return false
+      settled = true
+      close()
+      window.clearTimeout(timeoutId)
+      return true
+    }
+
+    const close = backendApi.streamGeneration(
+      taskId,
+      (task) => {
+        lastTask = task
+        updateTaskInStore(taskId, task)
+        const localTask = useStore.getState().tasks.find((item) => item.id === taskId)
+        if (localTask?.status === 'canceled' || !isActiveTaskStatus(task.status)) {
+          if (settle()) resolve(task)
+        }
+      },
+      () => {
+        if (settle()) fallbackPolling(taskId, settings, deadline).then(resolve, reject)
+      },
+    )
+
+    const timeoutId = window.setTimeout(() => {
+      if (!settle()) return
+      if (lastTask && !isActiveTaskStatus(lastTask.status)) {
+        resolve(lastTask)
+      } else {
+        fallbackPolling(taskId, settings, deadline).then(resolve, reject)
+      }
+    }, Math.max(1000, deadline - Date.now()))
+
+    const checkCancel = () => {
+      if (settled) return
+      const localTask = useStore.getState().tasks.find((item) => item.id === taskId)
+      if (localTask?.status === 'canceled') {
+        if (settle()) resolve(localTask as unknown as TaskRecord)
+      } else {
+        window.setTimeout(checkCancel, 2000)
+      }
+    }
+    window.setTimeout(checkCancel, 2000)
+  })
+}
+
+async function fallbackPolling(taskId: string, settings: AppSettings, deadline: number): Promise<TaskRecord> {
+  let serverTask = await backendApi.getGeneration(settings, taskId)
+  while (isActiveTaskStatus(serverTask.status) && Date.now() < deadline) {
+    await new Promise((resolve) => window.setTimeout(resolve, 1500))
+    const localTask = useStore.getState().tasks.find((item) => item.id === taskId)
+    if (localTask?.status === 'canceled') return serverTask
+    serverTask = await backendApi.getGeneration(settings, taskId)
+    updateTaskInStore(taskId, serverTask)
+  }
+  return serverTask
+}
+
 async function executeServerTask(taskId: string) {
   const { settings } = useStore.getState()
   const task = useStore.getState().tasks.find((item) => item.id === taskId)
@@ -380,15 +462,7 @@ async function executeServerTask(taskId: string) {
     }
     updateTaskInStore(taskId, started.task)
 
-    const deadline = Date.now() + Math.max(30_000, timeoutSeconds * 1000 + 15_000)
-    let serverTask = await backendApi.getGeneration(settings, taskId)
-    while (isActiveTaskStatus(serverTask.status) && Date.now() < deadline) {
-      await new Promise((resolve) => window.setTimeout(resolve, 1200))
-      const localTask = useStore.getState().tasks.find((item) => item.id === taskId)
-      if (localTask?.status === 'canceled') return
-      serverTask = await backendApi.getGeneration(settings, taskId)
-      updateTaskInStore(taskId, serverTask)
-    }
+    const serverTask = await waitForTaskCompletion(taskId, timeoutSeconds)
 
     if (isActiveTaskStatus(serverTask.status)) {
       throw new Error('后端生成仍在进行中，请稍后同步任务状态')
@@ -401,7 +475,11 @@ async function executeServerTask(taskId: string) {
     }
     if (serverTask.status === 'error') {
       updateTaskInStore(taskId, serverTask)
-      throw new Error(serverTask.error || '后端生成失败')
+      void refreshQueueStats()
+      const latestTask = useStore.getState().tasks.find((item) => item.id === taskId)
+      useStore.getState().showToast(`生成失败：${latestTask ? getTaskFailureSummary(latestTask) : '请查看详情'}`, 'error')
+      useStore.getState().setDetailTaskId(taskId)
+      return
     }
 
     for (const imgId of serverTask.outputImages || []) {
@@ -520,6 +598,7 @@ export async function logoutBackend() {
   const { settings, showToast } = useStore.getState()
   await backendApi.logout(settings)
   useStore.getState().setBackendUser(null)
+  useStore.getState().setShowUserSettings(false)
   resetSyncedServerState()
   showToast('已退出登录', 'success')
 }
