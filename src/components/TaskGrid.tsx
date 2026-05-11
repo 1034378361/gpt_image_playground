@@ -216,9 +216,9 @@ export default function TaskGrid() {
   return (
     <div ref={rootRef} data-task-grid-root className="relative min-h-[50vh]">
       <GenerationQueueStatus />
-      <div ref={gridRef} className="columns-1 sm:columns-2 lg:columns-3 gap-4 pb-10">
+      <div ref={gridRef} className="columns-1 sm:columns-2 lg:columns-3 gap-3 sm:gap-4 pb-10">
         {filteredTasks.map((task) => (
-          <div key={task.id} className="task-card-wrapper break-inside-avoid mb-4" data-task-id={task.id}>
+          <div key={task.id} className="task-card-wrapper break-inside-avoid mb-3 sm:mb-4" data-task-id={task.id}>
             <TaskCard
               task={task}
               onClick={(e) => {

@@ -325,7 +325,7 @@ export default function DetailModal() {
         </div>
 
         {/* 左侧：图片 */}
-        <div ref={imagePanelRef} className="md:w-1/2 w-full h-64 md:h-auto bg-gray-100 dark:bg-black/20 relative flex items-center justify-center flex-shrink-0 min-h-[16rem]">
+        <div ref={imagePanelRef} className="md:w-1/2 w-full h-56 sm:h-64 md:h-auto bg-gray-100 dark:bg-black/20 relative flex items-center justify-center flex-shrink-0 min-h-[14rem]">
           {task.status === 'done' && outputLen > 0 && showComparison && maskTargetSrc && currentOutputImageSrc ? (
             <div className="w-full h-full p-4 flex items-center justify-center">
               <ComparisonSlider beforeSrc={maskTargetSrc} afterSrc={currentOutputImageSrc} />
@@ -732,7 +732,7 @@ export default function DetailModal() {
           </div>
 
           {/* 操作按钮 */}
-          <div className="grid grid-cols-4 sm:flex gap-2 pt-4 border-t border-gray-100 dark:border-white/[0.08]">
+          <div className="grid grid-cols-2 sm:flex gap-2 pt-4 border-t border-gray-100 dark:border-white/[0.08]">
             {isActiveTask && (
               <button
                 onClick={handleCancel}

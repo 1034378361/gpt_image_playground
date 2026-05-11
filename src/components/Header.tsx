@@ -235,7 +235,7 @@ export default function Header() {
               setCurrentView('templates')
               setTemplateEditor({ mode: 'create' })
             }}
-            className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-900 transition-colors"
+            className="p-2.5 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-900 transition-colors"
             title="新建模板"
           >
             <svg className="w-5 h-5 text-gray-600 dark:text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -244,7 +244,7 @@ export default function Header() {
           </button>
           <button
             onClick={() => setShowHelp(true)}
-            className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-900 transition-colors"
+            className="p-2.5 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-900 transition-colors"
             title="操作指南"
           >
             <svg
@@ -264,7 +264,7 @@ export default function Header() {
           {canOpenSettings(backendUser) && (
             <button
               onClick={() => setShowSettings(true)}
-              className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-900 transition-colors"
+              className="p-2.5 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-900 transition-colors"
               title="管理控制台"
             >
               <svg
