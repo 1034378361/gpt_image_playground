@@ -30,7 +30,7 @@ import type {
   RegistrationMode,
 } from '../types'
 
-export type OpenPromptLibrarySourceId = 'evolink' | 'zerolu' | 'imgedify'
+export type OpenPromptLibrarySourceId = 'evolink' | 'zerolu' | 'imgedify' | 'youmind' | 'nanobanana'
 
 export const OPEN_PROMPT_LIBRARY_SOURCES: Array<{
   id: OpenPromptLibrarySourceId
@@ -51,6 +51,16 @@ export const OPEN_PROMPT_LIBRARY_SOURCES: Array<{
     id: 'imgedify',
     label: 'ImgEdify GPT4o',
     licenseNote: 'MIT',
+  },
+  {
+    id: 'youmind',
+    label: 'YouMind GPT Image 2 (5000+)',
+    licenseNote: 'CC BY 4.0',
+  },
+  {
+    id: 'nanobanana',
+    label: 'X/Twitter 热门 Prompt (1400+)',
+    licenseNote: 'CC BY 4.0',
   },
 ]
 

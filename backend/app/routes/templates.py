@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 import re
 import time
 from typing import Any
@@ -807,6 +808,82 @@ def _parse_imgedify_prompt_readme(source: OpenPromptSource, markdown: str) -> li
     return items
 
 
+def _parse_youmind_prompt_readme(source: OpenPromptSource, markdown: str) -> list[dict[str, str | list[str]]]:
+    items: list[dict[str, str | list[str]]] = []
+    entry_pattern = re.compile(
+        r"^###\s+No\.\s*\d+:\s*(?P<title>.+?)\s*$",
+        re.MULTILINE,
+    )
+    entries = list(entry_pattern.finditer(markdown))
+    for index, match in enumerate(entries):
+        title = match.group("title").strip()
+        start = match.end()
+        end = entries[index + 1].start() if index + 1 < len(entries) else len(markdown)
+        body = markdown[start:end]
+        prompt_match = re.search(r"```[^\n]*\n([\s\S]*?)```", body)
+        if not prompt_match:
+            continue
+        prompt = prompt_match.group(1).strip()
+        if len(prompt) < 20:
+            continue
+        image_match = re.search(r'<img\s+src="(?P<url>[^"]+)"', body)
+        image = image_match.group("url") if image_match else ""
+        author_match = re.search(r"\*\*Author:\*\*\s*\[(?P<name>[^\]]+)\]\((?P<url>[^)]+)\)", body)
+        source_match = re.search(r"\*\*Source:\*\*\s*\[(?P<label>[^\]]+)\]\((?P<url>[^)]+)\)", body)
+        source_url = source_match.group("url") if source_match else source.repo_url
+        source_author = f"@{author_match.group('name')}" if author_match else ""
+        items.append(
+            {
+                "title": title,
+                "prompt": prompt[:4000],
+                "image": image,
+                "sourceUrl": source_url,
+                "sourceAuthor": source_author,
+                "category": _infer_template_category("gpt-image-2", title),
+                "tags": _infer_template_tags("gpt-image-2", title, prompt),
+            }
+        )
+    return items
+
+
+def _parse_nanobanana_prompts_json(source: OpenPromptSource, text: str) -> list[dict[str, str | list[str]]]:
+    items: list[dict[str, str | list[str]]] = []
+    try:
+        data = json.loads(text)
+    except (json.JSONDecodeError, ValueError):
+        return items
+    if not isinstance(data, list):
+        return items
+    for entry in data:
+        if not isinstance(entry, dict):
+            continue
+        prompt = str(entry.get("prompt") or "").strip()
+        if len(prompt) < 20:
+            continue
+        title = prompt[:60].split("\n")[0].strip()
+        if len(title) > 50:
+            title = title[:50] + "..."
+        image = str(entry.get("image") or "")
+        author_name = str(entry.get("author_name") or "")
+        source_url = str(entry.get("source_url") or source.repo_url)
+        categories = entry.get("categories") or []
+        tags = [str(c) for c in categories[:6]] if isinstance(categories, list) else []
+        if not tags:
+            tags = _infer_template_tags("trending", title, prompt)
+        items.append(
+            {
+                "title": title,
+                "prompt": prompt[:4000],
+                "image": image,
+                "sourceUrl": source_url,
+                "sourceAuthor": f"@{author_name}" if author_name else "",
+                "category": _infer_template_category("trending", title),
+                "tags": tags,
+            }
+        )
+    return items
+
+
 def _clean_markdown_title(value: str) -> str:
     title = re.sub(r"<[^>]+>", "", value)
     title = re.sub(r"[*_`#\[\]]+", "", title)
@@ -921,6 +998,26 @@ OPEN_PROMPT_SOURCES: dict[str, OpenPromptSource] = {
         source_name="ImgEdify Awesome-GPT4o-Image-Prompts",
         license_name="MIT",
         parser=_parse_imgedify_prompt_readme,
+    ),
+    "youmind": OpenPromptSource(
+        id="youmind",
+        label="YouMind GPT Image 2 (5000+)",
+        readme_url="https://raw.githubusercontent.com/YouMind-OpenLab/awesome-gpt-image-2/main/README.md",
+        repo_url="https://github.com/YouMind-OpenLab/awesome-gpt-image-2",
+        raw_base_url="https://raw.githubusercontent.com/YouMind-OpenLab/awesome-gpt-image-2/main/",
+        source_name="YouMind awesome-gpt-image-2",
+        license_name="CC BY 4.0",
+        parser=_parse_youmind_prompt_readme,
+    ),
+    "nanobanana": OpenPromptSource(
+        id="nanobanana",
+        label="Trending Prompts from X (1400+)",
+        readme_url="https://raw.githubusercontent.com/jau123/nanobanana-trending-prompts/main/prompts/prompts.json",
+        repo_url="https://github.com/jau123/nanobanana-trending-prompts",
+        raw_base_url="https://raw.githubusercontent.com/jau123/nanobanana-trending-prompts/main/",
+        source_name="nanobanana-trending-prompts",
+        license_name="CC BY 4.0",
+        parser=_parse_nanobanana_prompts_json,
     ),
 }
 
