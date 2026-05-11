@@ -33,6 +33,9 @@ export default function TemplateFilterBar() {
     if (filters.scope === 'public') {
       return templates.filter((template) => isApprovedPublicTemplate(template))
     }
+    if (filters.scope === 'discover') {
+      return templates.filter((template) => isApprovedPublicTemplate(template))
+    }
     if (currentProjectId === UNASSIGNED_PROJECT_ID) {
       return templates.filter((template) => !template.projectId && !isApprovedPublicTemplate(template))
     }

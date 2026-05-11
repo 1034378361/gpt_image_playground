@@ -323,6 +323,10 @@ export function listTemplates(settings: AppSettings, scope: 'all' | 'mine' | 'pu
   return request(settings, `/templates?scope=${encodeURIComponent(scope)}`)
 }
 
+export function discoverTemplates(settings: AppSettings, limit = 50): Promise<PromptTemplate[]> {
+  return request(settings, `/templates/discover?limit=${limit}`)
+}
+
 export function listTemplateSubmissions(settings: AppSettings): Promise<PromptTemplate[]> {
   return request(settings, '/admin/template-submissions')
 }

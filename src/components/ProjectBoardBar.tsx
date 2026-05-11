@@ -60,6 +60,11 @@ export default function ProjectBoardBar() {
     setTemplateFilters({ scope: 'public' })
   }
 
+  const openDiscoverTemplates = () => {
+    setCurrentProjectId(null)
+    setTemplateFilters({ scope: 'discover' })
+  }
+
   const openReviewQueue = () => {
     setCurrentProjectId(null)
     setTemplateFilters({ scope: 'review' })
@@ -102,6 +107,19 @@ export default function ProjectBoardBar() {
                 }`}
               >
                 {publicLabel} {publicTemplateCount}
+              </button>
+            )}
+            {currentView === 'templates' && (
+              <button
+                type="button"
+                onClick={openDiscoverTemplates}
+                className={`rounded-xl border px-3 py-2 text-xs transition ${
+                  templateFilters.scope === 'discover' && currentProjectId === null
+                    ? 'border-blue-500 bg-blue-500 text-white dark:border-blue-400 dark:bg-blue-400 dark:text-gray-950'
+                    : 'border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100 dark:border-blue-400/20 dark:bg-blue-500/10 dark:text-blue-300 dark:hover:bg-blue-500/20'
+                }`}
+              >
+                探索
               </button>
             )}
             <button

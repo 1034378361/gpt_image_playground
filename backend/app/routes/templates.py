@@ -1915,6 +1915,25 @@ def create_template(payload: PromptTemplateIn, user: UserOut = Depends(require_u
     return row_to_template(row)
 
 
+@router.get("/api/templates/discover", response_model=list[PromptTemplateOut])
+def discover_templates(
+    limit: int = Query(50, ge=1, le=200),
+    user: UserOut = Depends(require_user),
+) -> list[PromptTemplateOut]:
+    with get_conn() as conn:
+        rows = conn.execute(
+            """
+            SELECT * FROM prompt_templates
+            WHERE visibility = 'public' AND submission_status = 'approved'
+              AND user_id != ?
+            ORDER BY quality_score DESC, success_count DESC, updated_at DESC
+            LIMIT ?
+            """,
+            (user.id, limit),
+        ).fetchall()
+    return [row_to_template(row) for row in rows]
+
+
 @router.get("/api/templates/similar", response_model=list[PromptTemplateOut])
 def list_similar_templates(
     templateId: str | None = Query(None),

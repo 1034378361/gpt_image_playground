@@ -15,10 +15,15 @@ export default function TemplateGrid() {
   const scopedTemplates = useMemo(() => {
     if (filters.scope === 'review') return templateSubmissions
     if (filters.scope === 'public') {
-      return templates.filter((template) => template.visibility === 'public' && template.submissionStatus === 'approved')
+      return templates.filter((template) => isApprovedPublicTemplate(template))
+    }
+    if (filters.scope === 'discover') {
+      return [...templates]
+        .filter((template) => isApprovedPublicTemplate(template) && template.userId !== backendUser?.id)
+        .sort((a, b) => (b.qualityScore ?? 0) - (a.qualityScore ?? 0) || (b.successCount ?? 0) - (a.successCount ?? 0))
     }
     return templates
-  }, [filters.scope, templateSubmissions, templates])
+  }, [filters.scope, templateSubmissions, templates, backendUser?.id])
 
   const filteredTemplates = useMemo(
     () =>

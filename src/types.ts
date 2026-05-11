@@ -287,7 +287,7 @@ export interface TemplateFilters {
   category: string
   tag: string
   favoriteOnly: boolean
-  scope: 'all' | 'public' | 'review'
+  scope: 'all' | 'public' | 'discover' | 'review'
   sort: 'updated' | 'popular' | 'quality' | 'used'
   collection: string
 }
