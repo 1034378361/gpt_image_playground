@@ -102,14 +102,18 @@ export async function initStore() {
   }
 
   const images = await getAllImages()
+  const orphanIds: string[] = []
   for (const img of images) {
     if (referencedIds.has(img.id)) {
       imageCache.set(img.id, img.dataUrl)
     } else {
-      await deleteImage(img.id)
+      orphanIds.push(img.id)
     }
   }
 
+  if (orphanIds.length > 0) {
+    void Promise.all(orphanIds.map((id) => deleteImage(id)))
+  }
   void evictOldImages(referencedIds)
 
   await loadBackendSession({ silent: true })
@@ -720,7 +724,7 @@ export async function syncServerData() {
     const uncachedIds = [...imageIds].filter((id) => !imageCache.has(id))
     if (uncachedIds.length > 0) {
       const batch = uncachedIds.slice(0, 20)
-      await Promise.all(
+      void Promise.all(
         batch.map(async (imageId) => {
           try {
             const dataUrl = await backendApi.getAssetDataUrl(settings, imageId)
