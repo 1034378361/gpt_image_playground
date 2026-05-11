@@ -713,28 +713,6 @@ export async function syncServerData() {
       setCurrentProjectId(null)
     }
 
-    const imageIds = new Set<string>()
-    for (const template of templates) {
-      if (template.coverImageId) imageIds.add(template.coverImageId)
-    }
-    for (const task of tasks) {
-      for (const id of task.outputImages || []) imageIds.add(id)
-    }
-
-    const uncachedIds = [...imageIds].filter((id) => !imageCache.has(id))
-    if (uncachedIds.length > 0) {
-      const batch = uncachedIds.slice(0, 20)
-      void Promise.all(
-        batch.map(async (imageId) => {
-          try {
-            const dataUrl = await backendApi.getAssetDataUrl(settings, imageId)
-            imageCache.set(imageId, dataUrl)
-            await putImage({ id: imageId, dataUrl, createdAt: Date.now(), source: 'generated' })
-          } catch { /* skip */ }
-        }),
-      )
-    }
-
     void syncAdminData(settings, systemManager, templateReviewer, {
       setAdminChannels, setAdminUsers, setTemplateSubmissions,
       setOpenPromptSources, setAuditLogs, setAutoImportSettings,
