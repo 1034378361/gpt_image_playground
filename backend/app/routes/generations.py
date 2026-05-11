@@ -1237,7 +1237,7 @@ def generation_preflight(payload: GenerationPreflightIn, user: UserOut = Depends
 def list_generations(user: UserOut = Depends(require_user)) -> list[GenerationTaskOut]:
     with get_conn() as conn:
         rows = conn.execute(
-            "SELECT * FROM generation_tasks WHERE user_id = ? ORDER BY created_at DESC",
+            "SELECT * FROM generation_tasks WHERE user_id = ? ORDER BY created_at DESC LIMIT 500",
             (user.id,),
         ).fetchall()
     return [row_to_task(row) for row in rows]
@@ -1309,7 +1309,8 @@ async def stream_generation_status(task_id: str, request: Request, user: UserOut
         yield f"event: status\ndata: {task.model_dump_json()}\n\n"
         if task.status in FINAL_TASK_STATUSES:
             return
-        while True:
+        max_iterations = 200
+        for _ in range(max_iterations):
             if await request.is_disconnected():
                 return
             updated = await wait_for_task_update(task_id, timeout=25.0)

@@ -56,7 +56,9 @@ export default function TaskGrid() {
     if (!hasActiveTask) return
     void refreshQueueStats()
     const timer = window.setInterval(() => {
-      void refreshQueueStats()
+      if (document.visibilityState === 'visible') {
+        void refreshQueueStats()
+      }
     }, 3000)
     return () => window.clearInterval(timer)
   }, [hasActiveTask])

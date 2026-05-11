@@ -27,6 +27,9 @@ import {
   getAllImages,
   getAllTasks,
   getAllTemplates,
+  clearImages,
+  clearTasks as dbClearTasks,
+  clearTemplates as dbClearTemplates,
   putImage,
   putTask,
   storeImage,
@@ -586,7 +589,6 @@ export async function cancelTask(task: TaskRecord) {
 export async function loadBackendSession(options: { silent?: boolean } = {}) {
   const state = useStore.getState()
   try {
-    await backendApi.getHealth()
     const user = await backendApi.getMe(state.settings)
     useStore.getState().setBackendUser(user)
     useStore.getState().setBackendUnavailableReason(null)
@@ -638,6 +640,10 @@ export async function logoutBackend() {
   useStore.getState().setBackendUser(null)
   useStore.getState().setShowUserSettings(false)
   resetSyncedServerState()
+  imageCache.clear()
+  void dbClearTasks()
+  void dbClearTemplates()
+  void clearImages()
   showToast('已退出登录', 'success')
 }
 
@@ -668,6 +674,7 @@ export async function syncServerData() {
   try {
     const systemManager = canManageSystem(backendUser)
     const templateReviewer = canReviewTemplates(backendUser)
+
     const [
       channels,
       projects,
@@ -675,14 +682,6 @@ export async function syncServerData() {
       tasks,
       channelLeaderboard,
       queueStats,
-      adminChannels,
-      adminUsers,
-      templateSubmissions,
-      openPromptSources,
-      auditLogs,
-      autoImportSettings,
-      autoImportRuns,
-      openPromptDiscoveries,
     ] = await Promise.all([
       backendApi.listChannels(settings),
       backendApi.listProjects(settings),
@@ -690,14 +689,6 @@ export async function syncServerData() {
       backendApi.listGenerations(settings),
       backendApi.listChannelLeaderboard(settings),
       backendApi.getGenerationQueueStats(settings),
-      systemManager ? backendApi.listAdminChannels(settings) : Promise.resolve([]),
-      systemManager ? backendApi.listAdminUsers(settings) : Promise.resolve([]),
-      templateReviewer ? backendApi.listTemplateSubmissions(settings) : Promise.resolve([]),
-      templateReviewer ? backendApi.listOpenPromptSources(settings) : Promise.resolve([]),
-      systemManager ? backendApi.listAuditLogs(settings) : Promise.resolve([]),
-      systemManager ? backendApi.getAutoImportSettings(settings) : Promise.resolve(null),
-      systemManager ? backendApi.listAutoImportRuns(settings) : Promise.resolve([]),
-      systemManager ? backendApi.listOpenPromptDiscoveries(settings) : Promise.resolve([]),
     ]) as [
       ApiChannel[],
       ProjectBoard[],
@@ -705,14 +696,6 @@ export async function syncServerData() {
       TaskRecord[],
       ChannelLeaderboardItem[],
       GenerationQueueStats,
-      AdminApiChannel[],
-      AdminUser[],
-      PromptTemplate[],
-      OpenPromptSourceStatus[],
-      AuditLog[],
-      AutoImportSettings | null,
-      AutoImportRun[],
-      OpenPromptDiscovery[],
     ]
 
     setChannels(channels)
@@ -721,14 +704,6 @@ export async function syncServerData() {
     setTasks(tasks)
     setChannelLeaderboard(channelLeaderboard)
     setQueueStats(queueStats)
-    setAdminChannels(adminChannels)
-    setAdminUsers(adminUsers)
-    setTemplateSubmissions(templateSubmissions)
-    setOpenPromptSources(openPromptSources)
-    setAuditLogs(auditLogs)
-    setAutoImportSettings(autoImportSettings)
-    setAutoImportRuns(autoImportRuns)
-    setOpenPromptDiscoveries(openPromptDiscoveries)
     syncChannelSelection(channels)
     if (currentProjectId && !projects.some((project) => project.id === currentProjectId)) {
       setCurrentProjectId(null)
@@ -739,24 +714,74 @@ export async function syncServerData() {
       if (template.coverImageId) imageIds.add(template.coverImageId)
     }
     for (const task of tasks) {
-      for (const id of task.inputImageIds || []) imageIds.add(id)
-      if (task.maskImageId) imageIds.add(task.maskImageId)
       for (const id of task.outputImages || []) imageIds.add(id)
     }
 
-    for (const imageId of imageIds) {
-      if (imageCache.has(imageId)) continue
-      try {
-        const dataUrl = await backendApi.getAssetDataUrl(settings, imageId)
-        imageCache.set(imageId, dataUrl)
-        await putImage({ id: imageId, dataUrl, createdAt: Date.now(), source: 'generated' })
-      } catch {
-        /* Missing remote assets should not block the rest of the library. */
-      }
+    const uncachedIds = [...imageIds].filter((id) => !imageCache.has(id))
+    if (uncachedIds.length > 0) {
+      const batch = uncachedIds.slice(0, 20)
+      await Promise.all(
+        batch.map(async (imageId) => {
+          try {
+            const dataUrl = await backendApi.getAssetDataUrl(settings, imageId)
+            imageCache.set(imageId, dataUrl)
+            await putImage({ id: imageId, dataUrl, createdAt: Date.now(), source: 'generated' })
+          } catch { /* skip */ }
+        }),
+      )
     }
+
+    void syncAdminData(settings, systemManager, templateReviewer, {
+      setAdminChannels, setAdminUsers, setTemplateSubmissions,
+      setOpenPromptSources, setAuditLogs, setAutoImportSettings,
+      setAutoImportRuns, setOpenPromptDiscoveries,
+    })
   } catch (err) {
     showToast(`同步后端数据失败：${err instanceof Error ? err.message : String(err)}`, 'error')
   }
+}
+
+async function syncAdminData(
+  settings: AppSettings,
+  systemManager: boolean,
+  templateReviewer: boolean,
+  setters: {
+    setAdminChannels: (v: AdminApiChannel[]) => void
+    setAdminUsers: (v: AdminUser[]) => void
+    setTemplateSubmissions: (v: PromptTemplate[]) => void
+    setOpenPromptSources: (v: OpenPromptSourceStatus[]) => void
+    setAuditLogs: (v: AuditLog[]) => void
+    setAutoImportSettings: (v: AutoImportSettings | null) => void
+    setAutoImportRuns: (v: AutoImportRun[]) => void
+    setOpenPromptDiscoveries: (v: OpenPromptDiscovery[]) => void
+  },
+) {
+  try {
+    const [
+      adminChannels, adminUsers, templateSubmissions, openPromptSources,
+      auditLogs, autoImportSettings, autoImportRuns, openPromptDiscoveries,
+    ] = await Promise.all([
+      systemManager ? backendApi.listAdminChannels(settings) : Promise.resolve([]),
+      systemManager ? backendApi.listAdminUsers(settings) : Promise.resolve([]),
+      templateReviewer ? backendApi.listTemplateSubmissions(settings) : Promise.resolve([]),
+      templateReviewer ? backendApi.listOpenPromptSources(settings) : Promise.resolve([]),
+      systemManager ? backendApi.listAuditLogs(settings) : Promise.resolve([]),
+      systemManager ? backendApi.getAutoImportSettings(settings) : Promise.resolve(null),
+      systemManager ? backendApi.listAutoImportRuns(settings) : Promise.resolve([]),
+      systemManager ? backendApi.listOpenPromptDiscoveries(settings) : Promise.resolve([]),
+    ]) as [
+      AdminApiChannel[], AdminUser[], PromptTemplate[], OpenPromptSourceStatus[],
+      AuditLog[], AutoImportSettings | null, AutoImportRun[], OpenPromptDiscovery[],
+    ]
+    setters.setAdminChannels(adminChannels)
+    setters.setAdminUsers(adminUsers)
+    setters.setTemplateSubmissions(templateSubmissions)
+    setters.setOpenPromptSources(openPromptSources)
+    setters.setAuditLogs(auditLogs)
+    setters.setAutoImportSettings(autoImportSettings)
+    setters.setAutoImportRuns(autoImportRuns)
+    setters.setOpenPromptDiscoveries(openPromptDiscoveries)
+  } catch { /* admin data sync failure is non-critical */ }
 }
 
 export async function refreshQueueStats() {

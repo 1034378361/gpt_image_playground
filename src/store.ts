@@ -58,9 +58,49 @@ import * as backendApi from './lib/backendApi'
 import { canManageSystem } from './lib/roles'
 
 // ===== Image cache =====
-// 内存缓存，id → dataUrl，避免每次从 IndexedDB 读取
+// 内存 LRU 缓存，id → dataUrl，避免每次从 IndexedDB 读取
 
-export const imageCache = new Map<string, string>()
+const IMAGE_CACHE_MAX = 100
+
+class LRUImageCache {
+  private map = new Map<string, string>()
+
+  get(id: string): string | undefined {
+    const value = this.map.get(id)
+    if (value !== undefined) {
+      this.map.delete(id)
+      this.map.set(id, value)
+    }
+    return value
+  }
+
+  has(id: string): boolean {
+    return this.map.has(id)
+  }
+
+  set(id: string, dataUrl: string): void {
+    if (this.map.has(id)) this.map.delete(id)
+    this.map.set(id, dataUrl)
+    while (this.map.size > IMAGE_CACHE_MAX) {
+      const oldest = this.map.keys().next().value
+      if (oldest !== undefined) this.map.delete(oldest)
+    }
+  }
+
+  delete(id: string): void {
+    this.map.delete(id)
+  }
+
+  clear(): void {
+    this.map.clear()
+  }
+
+  get size(): number {
+    return this.map.size
+  }
+}
+
+export const imageCache = new LRUImageCache()
 
 export function getCachedImage(id: string): string | undefined {
   return imageCache.get(id)

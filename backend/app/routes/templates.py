@@ -1506,12 +1506,13 @@ def _assert_can_manage_template(template: PromptTemplateOut, user: UserOut) -> N
 
 def _visible_template_rows(conn: Any, user: UserOut) -> list[Any]:
     if user.role == "admin":
-        return conn.execute("SELECT * FROM prompt_templates ORDER BY updated_at DESC").fetchall()
+        return conn.execute("SELECT * FROM prompt_templates ORDER BY updated_at DESC LIMIT 1000").fetchall()
     return conn.execute(
         """
         SELECT * FROM prompt_templates
         WHERE user_id = ? OR (visibility = 'public' AND submission_status = 'approved')
         ORDER BY updated_at DESC
+        LIMIT 1000
         """,
         (user.id,),
     ).fetchall()
@@ -1706,7 +1707,7 @@ def list_templates(scope: str = Query("all"), user: UserOut = Depends(require_us
     with get_conn() as conn:
         if scope == "mine":
             rows = conn.execute(
-                "SELECT * FROM prompt_templates WHERE user_id = ? ORDER BY updated_at DESC",
+                "SELECT * FROM prompt_templates WHERE user_id = ? ORDER BY updated_at DESC LIMIT 1000",
                 (user.id,),
             ).fetchall()
         elif scope == "public":

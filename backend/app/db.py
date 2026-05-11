@@ -228,6 +228,12 @@ def init_db(conn: sqlite3.Connection | None = None) -> None:
             CREATE INDEX IF NOT EXISTS idx_generation_tasks_user_created
               ON generation_tasks(user_id, created_at DESC);
 
+            CREATE INDEX IF NOT EXISTS idx_generation_tasks_user_status
+              ON generation_tasks(user_id, status);
+
+            CREATE INDEX IF NOT EXISTS idx_generation_tasks_status
+              ON generation_tasks(status, created_at ASC);
+
             CREATE TABLE IF NOT EXISTS audit_logs (
               id TEXT PRIMARY KEY,
               actor_user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
@@ -308,6 +314,9 @@ def init_db(conn: sqlite3.Connection | None = None) -> None:
 
             CREATE INDEX IF NOT EXISTS idx_assets_user_created
               ON assets(user_id, created_at DESC);
+
+            CREATE INDEX IF NOT EXISTS idx_assets_task_id
+              ON assets(task_id);
             """
         )
         ensure_column(db, "generation_tasks", "actual_params_json", "TEXT")
