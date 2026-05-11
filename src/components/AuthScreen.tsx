@@ -101,14 +101,19 @@ export default function AuthScreen() {
   const needsInviteCode = Boolean(authSettings?.inviteCodeRequired && authSettings.hasUsers)
 
   return (
-    <div className="min-h-screen bg-gray-50 text-gray-900 dark:bg-gray-950 dark:text-gray-100">
+    <div className="min-h-screen bg-gradient-to-br from-gray-50 via-brand-50/30 to-gray-100 text-gray-900 dark:from-[#0c0c10] dark:via-brand-950/20 dark:to-[#0c0c10] dark:text-gray-100">
       <div className="mx-auto flex min-h-screen max-w-5xl items-center justify-center px-6 py-10">
         <div className="grid w-full gap-8 lg:grid-cols-[1.2fr,0.9fr]">
-          <section className="rounded-3xl border border-gray-200 bg-white p-8 shadow-sm dark:border-white/[0.08] dark:bg-gray-900">
+          <section className="rounded-3xl border border-gray-200/70 bg-white/80 p-8 shadow-lg backdrop-blur dark:border-white/[0.08] dark:bg-gray-900/80">
             <div className="max-w-xl">
-              <p className="text-sm font-medium text-blue-600 dark:text-blue-300">后端统一访问</p>
-              <h1 className="mt-3 text-3xl font-semibold tracking-tight">GPT Image Playground</h1>
-              <p className="mt-4 text-sm leading-7 text-gray-600 dark:text-gray-300">
+              <div className="mb-4 inline-flex items-center gap-2 rounded-full bg-brand-50 px-3 py-1 text-xs font-medium text-brand-600 dark:bg-brand-500/10 dark:text-brand-300">
+                <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+                </svg>
+                后端统一访问
+              </div>
+              <h1 className="text-3xl font-bold tracking-tight">GPT Image Playground</h1>
+              <p className="mt-3 text-sm leading-7 text-gray-500 dark:text-gray-400">
                 现在所有模板、生成任务、渠道和模型配置都通过后端统一管理。登录后才能进入前端；普通用户只能使用管理员开放的渠道和模型。
               </p>
               <div className="mt-6 grid gap-3 text-sm text-gray-600 dark:text-gray-300">
@@ -136,8 +141,8 @@ export default function AuthScreen() {
             </div>
           </section>
 
-          <section className="rounded-3xl border border-gray-200 bg-white p-8 shadow-sm dark:border-white/[0.08] dark:bg-gray-900">
-            <h2 className="text-lg font-semibold">登录或注册</h2>
+          <section className="rounded-3xl border border-gray-200/70 bg-white/80 p-8 shadow-lg backdrop-blur dark:border-white/[0.08] dark:bg-gray-900/80">
+            <h2 className="text-lg font-bold">登录或注册</h2>
             <p className="mt-2 text-sm text-gray-500 dark:text-gray-400">
               先完成账户登录，才能访问模板库和任务页。
             </p>
@@ -155,7 +160,7 @@ export default function AuthScreen() {
                   onChange={(e) => setUsername(e.target.value)}
                   type="text"
                   autoComplete="username"
-                  className="w-full rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm outline-none transition focus:border-blue-300 dark:border-white/[0.08] dark:bg-white/[0.04] dark:text-gray-200 dark:focus:border-blue-500/50"
+                  className="w-full rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm outline-none transition focus:border-brand-400 focus:ring-2 focus:ring-brand-500/20 dark:border-white/[0.08] dark:bg-white/[0.04] dark:text-gray-200 dark:focus:border-brand-500/50"
                 />
               </label>
               <label className="block">
@@ -165,7 +170,7 @@ export default function AuthScreen() {
                   onChange={(e) => setPassword(e.target.value)}
                   type="password"
                   autoComplete="current-password"
-                  className="w-full rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm outline-none transition focus:border-blue-300 dark:border-white/[0.08] dark:bg-white/[0.04] dark:text-gray-200 dark:focus:border-blue-500/50"
+                  className="w-full rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm outline-none transition focus:border-brand-400 focus:ring-2 focus:ring-brand-500/20 dark:border-white/[0.08] dark:bg-white/[0.04] dark:text-gray-200 dark:focus:border-brand-500/50"
                 />
               </label>
               {needsInviteCode && (
@@ -191,7 +196,7 @@ export default function AuthScreen() {
                   type="button"
                   onClick={() => void run('login')}
                   disabled={busy !== null}
-                  className="rounded-xl bg-blue-500 px-4 py-2.5 text-sm font-medium text-white transition hover:bg-blue-600 disabled:cursor-wait disabled:opacity-50"
+                  className="rounded-xl bg-brand-500 px-4 py-2.5 text-sm font-medium text-white transition hover:bg-brand-600 disabled:cursor-wait disabled:opacity-50"
                 >
                   {busy === 'login' ? '登录中...' : '登录'}
                 </button>

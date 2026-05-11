@@ -213,7 +213,7 @@ export default function Header() {
               onClick={() => setCurrentView('tasks')}
               className={`px-2 sm:px-3 py-1.5 rounded-lg text-xs sm:text-sm transition ${
                 currentView === 'tasks'
-                  ? 'bg-blue-500 text-white shadow-sm'
+                  ? 'bg-brand-500 text-white shadow-sm'
                   : 'text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-white/[0.06]'
               }`}
             >
@@ -223,7 +223,7 @@ export default function Header() {
               onClick={() => setCurrentView('templates')}
               className={`px-2 sm:px-3 py-1.5 rounded-lg text-xs sm:text-sm transition ${
                 currentView === 'templates'
-                  ? 'bg-blue-500 text-white shadow-sm'
+                  ? 'bg-brand-500 text-white shadow-sm'
                   : 'text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-white/[0.06]'
               }`}
             >

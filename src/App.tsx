@@ -30,8 +30,16 @@ function OverlayFallback() {
 function ViewFallback() {
   return (
     <div className="px-6 py-10">
-      <div className="rounded-3xl border border-gray-200 bg-white px-6 py-5 text-sm text-gray-500 shadow-sm dark:border-white/[0.08] dark:bg-gray-900 dark:text-gray-400">
-        正在加载页面内容...
+      <div className="columns-1 sm:columns-2 lg:columns-3 gap-4">
+        {[140, 200, 160, 180, 220, 140].map((h, i) => (
+          <div key={i} className="mb-4 break-inside-avoid rounded-xl border border-gray-200 bg-white dark:border-white/[0.08] dark:bg-gray-900 overflow-hidden">
+            <div className="skeleton" style={{ height: h }} />
+            <div className="p-3 space-y-2">
+              <div className="skeleton h-3 w-3/4" />
+              <div className="skeleton h-3 w-1/2" />
+            </div>
+          </div>
+        ))}
       </div>
     </div>
   )
