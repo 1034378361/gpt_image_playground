@@ -455,6 +455,7 @@ export const useStore = create<AppState>()(
       partialize: (state) => ({
         settings: state.settings,
         params: state.params,
+        prompt: state.prompt,
         composerClearMode: state.composerClearMode,
         theme: state.theme,
         dismissedCodexCliPrompts: state.dismissedCodexCliPrompts,
