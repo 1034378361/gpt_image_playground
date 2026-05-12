@@ -24,6 +24,9 @@ export default function TemplateCard({ template }: Props) {
   const showToast = useStore((s) => s.showToast)
   const backendUser = useStore((s) => s.backendUser)
   const currentProjectId = useStore((s) => s.currentProjectId)
+  const selectedTemplateIds = useStore((s) => s.selectedTemplateIds)
+  const setSelectedTemplateIds = useStore((s) => s.setSelectedTemplateIds)
+  const isSelected = selectedTemplateIds.includes(template.id)
   const taskCount = useStore((s) =>
     s.tasks.filter((task) => task.templateId === template.id || template.linkedTaskIds.includes(task.id)).length,
   )
@@ -84,10 +87,27 @@ export default function TemplateCard({ template }: Props) {
 
   return (
     <div
-      className="group flex cursor-pointer flex-col overflow-hidden rounded-xl border border-gray-200 bg-white transition hover:border-gray-300 hover:shadow-lg dark:border-white/[0.08] dark:bg-gray-900 dark:hover:border-white/[0.18] dark:hover:bg-gray-800/80 break-inside-avoid mb-3 sm:mb-4"
+      className={`group flex cursor-pointer flex-col overflow-hidden rounded-xl border bg-white transition hover:border-gray-300 hover:shadow-lg dark:bg-gray-900 dark:hover:border-white/[0.18] dark:hover:bg-gray-800/80 break-inside-avoid mb-3 sm:mb-4 ${isSelected ? 'border-blue-400 ring-2 ring-blue-200 dark:border-blue-500 dark:ring-blue-500/30' : 'border-gray-200 dark:border-white/[0.08]'}`}
       onClick={() => setSelectedTemplateId(template.id)}
     >
       <div className="relative overflow-hidden" style={{ minHeight: '6rem' }}>
+        <label
+          className={`absolute top-2 left-2 z-10 flex h-5 w-5 items-center justify-center rounded border bg-white/90 backdrop-blur transition dark:bg-gray-800/90 ${isSelected ? 'border-blue-500 bg-blue-500 dark:bg-blue-500' : 'border-gray-300 opacity-0 group-hover:opacity-100 dark:border-gray-600'}`}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <input
+            type="checkbox"
+            checked={isSelected}
+            onChange={(e) => {
+              if (e.target.checked) {
+                setSelectedTemplateIds([...selectedTemplateIds, template.id])
+              } else {
+                setSelectedTemplateIds(selectedTemplateIds.filter((id) => id !== template.id))
+              }
+            }}
+            className="h-3.5 w-3.5 accent-blue-500"
+          />
+        </label>
         {coverSrc ? (
           <>
             <img

@@ -194,6 +194,8 @@ interface AppState {
   setTemplateFilters: (filters: Partial<TemplateFilters>) => void
   selectedTemplateId: string | null
   setSelectedTemplateId: (id: string | null) => void
+  selectedTemplateIds: string[]
+  setSelectedTemplateIds: (ids: string[]) => void
   templateEditor:
     | { mode: 'create' }
     | { mode: 'fromCurrent' }
@@ -378,6 +380,8 @@ export const useStore = create<AppState>()(
         set((s) => ({ templateFilters: { ...s.templateFilters, ...filters } })),
       selectedTemplateId: null,
       setSelectedTemplateId: (selectedTemplateId) => set({ selectedTemplateId }),
+      selectedTemplateIds: [],
+      setSelectedTemplateIds: (selectedTemplateIds) => set({ selectedTemplateIds }),
       templateEditor: null,
       setTemplateEditor: (templateEditor) => set({ templateEditor }),
       templateVariableTemplateId: null,
@@ -603,6 +607,19 @@ export async function removeTemplate(templateId: string) {
   showToast('模板已删除', 'success')
 }
 
+export async function removeMultipleTemplates(templateIds: string[]) {
+  if (!templateIds.length) return
+  const { templates, setTemplates, templateSubmissions, setTemplateSubmissions, selectedTemplateId, activeTemplateId, showToast } = useStore.getState()
+  assertServerStorageReady()
+  const toDelete = new Set(templateIds)
+  setTemplates(templates.filter((t) => !toDelete.has(t.id)))
+  setTemplateSubmissions(templateSubmissions.filter((t) => !toDelete.has(t.id)))
+  await backendApi.batchDeleteTemplates(useStore.getState().settings, templateIds)
+  if (selectedTemplateId && toDelete.has(selectedTemplateId)) useStore.getState().setSelectedTemplateId(null)
+  if (activeTemplateId && toDelete.has(activeTemplateId)) useStore.getState().setActiveTemplateId(null)
+  showToast(`已删除 ${templateIds.length} 个模板`, 'success')
+}
+
 export async function duplicateTemplate(templateId: string): Promise<PromptTemplate | null> {
   const state = useStore.getState()
   const template = state.templates.find((item) => item.id === templateId)
@@ -778,14 +795,13 @@ export async function editOutputs(task: TaskRecord) {
 
 /** 删除多条任务 */
 export async function removeMultipleTasks(taskIds: string[]) {
-  const { tasks, setTasks, inputImages, showToast, clearSelection, selectedTaskIds } = useStore.getState()
-  
+  const { tasks, setTasks, inputImages, showToast, selectedTaskIds } = useStore.getState()
+
   if (!taskIds.length) return
 
   const toDelete = new Set(taskIds)
   const remaining = tasks.filter(t => !toDelete.has(t.id))
 
-  // 收集所有被删除任务的关联图片
   const deletedImageIds = new Set<string>()
   for (const t of tasks) {
     if (toDelete.has(t.id)) {
@@ -796,15 +812,14 @@ export async function removeMultipleTasks(taskIds: string[]) {
   }
 
   setTasks(remaining)
-  for (const id of taskIds) {
-    if (isServerStorageReady()) {
-      await backendApi.deleteGeneration(useStore.getState().settings, id).catch(() => undefined)
-    } else {
+  if (isServerStorageReady()) {
+    await backendApi.batchDeleteGenerations(useStore.getState().settings, taskIds).catch(() => undefined)
+  } else {
+    for (const id of taskIds) {
       await dbDeleteTask(id)
     }
   }
 
-  // 找出其他任务仍引用的图片
   const stillUsed = new Set<string>()
   for (const t of remaining) {
     for (const id of t.inputImageIds || []) stillUsed.add(id)
@@ -814,7 +829,6 @@ export async function removeMultipleTasks(taskIds: string[]) {
   for (const img of inputImages) stillUsed.add(img.id)
   for (const imgId of getTemplateCoverImageIds()) stillUsed.add(imgId)
 
-  // 删除孤立图片
   for (const imgId of deletedImageIds) {
     if (!stillUsed.has(imgId)) {
       await deleteImage(imgId)
@@ -822,7 +836,6 @@ export async function removeMultipleTasks(taskIds: string[]) {
     }
   }
 
-  // 如果删除的任务在选中列表中，则移除
   const newSelection = selectedTaskIds.filter(id => !toDelete.has(id))
   if (newSelection.length !== selectedTaskIds.length) {
     useStore.getState().setSelectedTaskIds(newSelection)

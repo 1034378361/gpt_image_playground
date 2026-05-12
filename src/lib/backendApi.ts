@@ -361,6 +361,13 @@ export function deleteTemplate(settings: AppSettings, templateId: string): Promi
   return request(settings, `/templates/${templateId}`, { method: 'DELETE' })
 }
 
+export function batchDeleteTemplates(settings: AppSettings, ids: string[]): Promise<{ deleted: number }> {
+  return request(settings, '/templates/batch-delete', {
+    method: 'POST',
+    body: JSON.stringify({ ids }),
+  })
+}
+
 export function duplicateTemplate(settings: AppSettings, templateId: string): Promise<PromptTemplate> {
   return request(settings, `/templates/${templateId}/duplicate`, { method: 'POST' })
 }
@@ -490,6 +497,13 @@ export function getGeneration(settings: AppSettings, taskId: string): Promise<Ta
 
 export function deleteGeneration(settings: AppSettings, taskId: string): Promise<{ ok: boolean }> {
   return request(settings, `/generations/${taskId}`, { method: 'DELETE' })
+}
+
+export function batchDeleteGenerations(settings: AppSettings, ids: string[]): Promise<{ deleted: number }> {
+  return request(settings, '/generations/batch-delete', {
+    method: 'POST',
+    body: JSON.stringify({ ids }),
+  })
 }
 
 export function cancelGeneration(settings: AppSettings, taskId: string): Promise<TaskRecord> {

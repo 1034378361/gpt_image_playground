@@ -41,6 +41,7 @@ from ..helpers import (
 )
 from ..schemas import (
     AssetOut,
+    BatchDeleteIn,
     ChannelCompatibilityStatus,
     ChannelHealthStatus,
     ChannelModel,
@@ -1389,6 +1390,53 @@ def delete_generation(task_id: str, user: UserOut = Depends(require_user)) -> di
     if cur.rowcount == 0:
         raise HTTPException(status_code=404, detail="Generation not found")
     return {"ok": True}
+
+
+@router.post("/api/generations/batch-delete")
+def batch_delete_generations(payload: BatchDeleteIn, user: UserOut = Depends(require_user)) -> dict[str, int]:
+    ids = list(set(payload.ids[:200]))
+    deleted = 0
+    with get_conn() as conn:
+        for task_id in ids:
+            task_row = conn.execute(
+                "SELECT * FROM generation_tasks WHERE id = ? AND user_id = ?",
+                (task_id, user.id),
+            ).fetchone()
+            if not task_row:
+                continue
+            asset_rows = conn.execute(
+                "SELECT * FROM assets WHERE task_id = ? AND user_id = ?",
+                (task_id, user.id),
+            ).fetchall()
+            conn.execute("DELETE FROM generation_tasks WHERE id = ? AND user_id = ?", (task_id, user.id))
+            for asset_row in asset_rows:
+                asset_id = asset_row["id"]
+                token = f'"{asset_id}"'
+                still_used = conn.execute(
+                    """
+                    SELECT 1
+                    FROM generation_tasks
+                    WHERE user_id = ?
+                      AND (
+                        mask_image_id = ?
+                        OR instr(input_image_ids_json, ?) > 0
+                        OR instr(output_image_ids_json, ?) > 0
+                      )
+                    LIMIT 1
+                    """,
+                    (user.id, asset_id, token, token),
+                ).fetchone()
+                template_cover = conn.execute(
+                    "SELECT 1 FROM prompt_templates WHERE cover_image_id = ? LIMIT 1",
+                    (asset_id,),
+                ).fetchone()
+                if still_used or template_cover:
+                    conn.execute("UPDATE assets SET task_id = NULL WHERE id = ? AND user_id = ?", (asset_id, user.id))
+                    continue
+                conn.execute("DELETE FROM assets WHERE id = ? AND user_id = ?", (asset_id, user.id))
+                delete_asset_files(asset_row)
+            deleted += 1
+    return {"deleted": deleted}
 
 
 # PLACEHOLDER_MORE_ROUTES

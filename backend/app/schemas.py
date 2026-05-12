@@ -446,6 +446,10 @@ class OpenPromptImportIn(BaseModel):
     selectedKeys: list[str] = Field(default_factory=list)
 
 
+class BatchDeleteIn(BaseModel):
+    ids: list[str] = Field(min_length=1, max_length=200)
+
+
 class GenerationTaskIn(BaseModel):
     id: str | None = None
     templateId: str | None = None

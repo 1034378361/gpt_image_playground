@@ -14,6 +14,7 @@ from ..assets import asset_is_publicly_visible
 from ..config import settings
 from ..db import get_conn
 from ..schemas import (
+    BatchDeleteIn,
     ChannelModel,
     OpenPromptImportIn,
     OpenPromptPreviewItemOut,
@@ -1549,6 +1550,30 @@ def delete_template(template_id: str, user: UserOut = Depends(require_user)) -> 
     if cur.rowcount == 0:
         raise HTTPException(status_code=404, detail="Template not found")
     return {"ok": True}
+
+
+@router.post("/api/templates/batch-delete")
+def batch_delete_templates(payload: BatchDeleteIn, user: UserOut = Depends(require_user)) -> dict[str, int]:
+    ids = list(set(payload.ids[:200]))
+    deleted = 0
+    with get_conn() as conn:
+        for template_id in ids:
+            row = conn.execute(
+                "SELECT * FROM prompt_templates WHERE id = ?", (template_id,),
+            ).fetchone()
+            if not row:
+                continue
+            template = row_to_template(row)
+            if template.userId != user.id and user.role != "admin":
+                continue
+            if template.submissionStatus == "submitted":
+                continue
+            if template.visibility == "public" or template.submissionStatus == "approved":
+                if user.role != "admin":
+                    continue
+            conn.execute("DELETE FROM prompt_templates WHERE id = ?", (template_id,))
+            deleted += 1
+    return {"deleted": deleted}
 
 
 @router.post("/api/templates/{template_id}/duplicate", response_model=PromptTemplateOut)
