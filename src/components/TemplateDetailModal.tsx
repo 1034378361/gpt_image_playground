@@ -356,7 +356,7 @@ export default function TemplateDetailModal() {
             {exampleImages.length > 0 && (
               <div className="mb-4">
                 <h3 className="text-xs font-medium text-gray-400 dark:text-gray-500 uppercase tracking-wider mb-2">示例图</h3>
-                <div className="grid grid-cols-4 sm:grid-cols-6 gap-2">
+                <div className="grid grid-cols-3 sm:grid-cols-6 gap-2">
                   {exampleImages.slice(0, 12).map((src) => (
                     <button
                       key={src}
@@ -408,7 +408,7 @@ export default function TemplateDetailModal() {
             {outputImageIds.length > 0 && (
               <div className="mb-4">
                 <h3 className="text-xs font-medium text-gray-400 dark:text-gray-500 uppercase tracking-wider mb-2">关联产物</h3>
-                <div className="grid grid-cols-4 sm:grid-cols-6 gap-2">
+                <div className="grid grid-cols-3 sm:grid-cols-6 gap-2">
                   {outputImageIds.map((imageId) => {
                     const src = imageSrcs[imageId] || ''
                     return (

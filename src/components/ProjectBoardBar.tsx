@@ -146,7 +146,7 @@ export default function ProjectBoardBar() {
                 }`}
               >
                 <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: project.color }} />
-                <span className="max-w-[10rem] truncate">{project.name}</span>
+                <span className="max-w-[5rem] sm:max-w-[10rem] truncate">{project.name}</span>
                 <span className="opacity-70">{countForProject(project.id)}</span>
               </button>
             ))}
