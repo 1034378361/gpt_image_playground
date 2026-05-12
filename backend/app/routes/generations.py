@@ -60,7 +60,7 @@ from ..schemas import (
     UserOut,
 )
 from ..security import new_id, now_ms
-from ..state import ACTIVE_TASK_STATUSES, FINAL_TASK_STATUSES
+from ..state import FINAL_TASK_STATUSES
 from .. import state as _state
 from .templates import _recalculate_template_quality as recalculate_template_quality
 

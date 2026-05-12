@@ -11,3 +11,4 @@ __pycache__/
 *.tar
 .tmp-*.tar*
 deploy/single-image-build.json
+.remember/test-results/
