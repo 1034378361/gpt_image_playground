@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState, type ChangeEvent } from 'react'
+import { useMemo, useRef, type ChangeEvent } from 'react'
 import { exportTemplatePack, removeMultipleTemplates, useStore } from '../store'
 import { importTemplatePackFile } from '../storeBackend'
 import {
@@ -11,24 +11,19 @@ import {
   isApprovedPublicTemplate,
   UNASSIGNED_PROJECT_ID,
 } from '../lib/templateUtils'
-import { OPEN_PROMPT_LIBRARY_SOURCES, type OpenPromptLibrarySourceId } from '../lib/backendApi'
 import { canReviewTemplates } from '../lib/roles'
 import Select from './Select'
-import OpenPromptImportPreviewModal from './OpenPromptImportPreviewModal'
 
 export default function TemplateFilterBar() {
   const templates = useStore((s) => s.templates)
   const templateSubmissions = useStore((s) => s.templateSubmissions)
   const backendUser = useStore((s) => s.backendUser)
-  const openPromptSources = useStore((s) => s.openPromptSources)
   const filters = useStore((s) => s.templateFilters)
   const setTemplateFilters = useStore((s) => s.setTemplateFilters)
   const currentProjectId = useStore((s) => s.currentProjectId)
   const selectedTemplateIds = useStore((s) => s.selectedTemplateIds)
   const setSelectedTemplateIds = useStore((s) => s.setSelectedTemplateIds)
   const setConfirmDialog = useStore((s) => s.setConfirmDialog)
-  const [importSource, setImportSource] = useState<OpenPromptLibrarySourceId>('evolink')
-  const [previewOpen, setPreviewOpen] = useState(false)
   const packInputRef = useRef<HTMLInputElement>(null)
 
   const sourceTemplates = useMemo(() => {
@@ -50,7 +45,6 @@ export default function TemplateFilterBar() {
   const categories = useMemo(() => getTemplateCategories(sourceTemplates), [sourceTemplates])
   const tags = useMemo(() => getTemplateTags(sourceTemplates), [sourceTemplates])
   const collectionCounts = useMemo(() => getTemplateCollectionCounts(sourceTemplates), [sourceTemplates])
-  const selectedImportStatus = openPromptSources.find((source) => source.id === importSource)
   const templateReviewEnabled = canReviewTemplates(backendUser)
   const collectionOptions = [
     { label: '全部专题', value: ALL_TEMPLATE_COLLECTIONS },
@@ -70,65 +64,23 @@ export default function TemplateFilterBar() {
   return (
     <div className="mt-4 sm:mt-6 mb-3 sm:mb-4 flex flex-col gap-2 sm:gap-3">
       <div className="hidden sm:flex flex-wrap gap-2">
-        {templateReviewEnabled && (
-          <div className="flex min-w-0 flex-wrap items-center gap-2">
-            <div className="relative w-44">
-              <Select
-                value={importSource}
-                onChange={(value) => setImportSource(value as OpenPromptLibrarySourceId)}
-                options={OPEN_PROMPT_LIBRARY_SOURCES.map((source) => ({ label: source.label, value: source.id }))}
-                className="rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-700 transition hover:bg-emerald-100 dark:border-emerald-400/20 dark:bg-emerald-500/10 dark:text-emerald-300 dark:hover:bg-emerald-500/20"
-              />
-            </div>
-            <button
-              onClick={() => setPreviewOpen(true)}
-              className="rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-700 transition hover:bg-emerald-100 disabled:opacity-50 dark:border-emerald-400/20 dark:bg-emerald-500/10 dark:text-emerald-300 dark:hover:bg-emerald-500/20"
-            >
-              预览导入
-            </button>
-            {selectedImportStatus && (
-              <div className="flex min-w-[14rem] flex-wrap gap-x-2 gap-y-1 rounded-xl border border-gray-200 bg-white px-3 py-2 text-xs text-gray-500 dark:border-white/[0.08] dark:bg-gray-900 dark:text-gray-400">
-                <span>已入库 {selectedImportStatus.importedCount}</span>
-                <span>上次 +{selectedImportStatus.lastCreated} / 更新 {selectedImportStatus.lastUpdated}</span>
-                {selectedImportStatus.lastSyncedAt && <span>{new Date(selectedImportStatus.lastSyncedAt).toLocaleDateString('zh-CN')}</span>}
-              </div>
-            )}
-            <button
-              type="button"
-              onClick={() => exportTemplatePack(sourceTemplates)}
-              className="rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm text-gray-600 transition hover:bg-gray-100 dark:border-white/[0.08] dark:bg-gray-900 dark:text-gray-300 dark:hover:bg-white/[0.06]"
-            >
-              导出模板包
-            </button>
-            <button
-              type="button"
-              onClick={() => packInputRef.current?.click()}
-              className="rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm text-gray-600 transition hover:bg-gray-100 dark:border-white/[0.08] dark:bg-gray-900 dark:text-gray-300 dark:hover:bg-white/[0.06]"
-            >
-              导入模板包
-            </button>
-            <input ref={packInputRef} type="file" accept="application/json,.json" className="hidden" onChange={handlePackImport} />
-          </div>
-        )}
-        {!templateReviewEnabled && (
-          <div className="flex min-w-0 flex-wrap items-center gap-2">
-            <button
-              type="button"
-              onClick={() => exportTemplatePack(sourceTemplates)}
-              className="rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm text-gray-600 transition hover:bg-gray-100 dark:border-white/[0.08] dark:bg-gray-900 dark:text-gray-300 dark:hover:bg-white/[0.06]"
-            >
-              导出模板包
-            </button>
-            <button
-              type="button"
-              onClick={() => packInputRef.current?.click()}
-              className="rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm text-gray-600 transition hover:bg-gray-100 dark:border-white/[0.08] dark:bg-gray-900 dark:text-gray-300 dark:hover:bg-white/[0.06]"
-            >
-              导入模板包
-            </button>
-            <input ref={packInputRef} type="file" accept="application/json,.json" className="hidden" onChange={handlePackImport} />
-          </div>
-        )}
+        <div className="flex min-w-0 flex-wrap items-center gap-2">
+          <button
+            type="button"
+            onClick={() => exportTemplatePack(sourceTemplates)}
+            className="rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm text-gray-600 transition hover:bg-gray-100 dark:border-white/[0.08] dark:bg-gray-900 dark:text-gray-300 dark:hover:bg-white/[0.06]"
+          >
+            导出模板包
+          </button>
+          <button
+            type="button"
+            onClick={() => packInputRef.current?.click()}
+            className="rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm text-gray-600 transition hover:bg-gray-100 dark:border-white/[0.08] dark:bg-gray-900 dark:text-gray-300 dark:hover:bg-white/[0.06]"
+          >
+            导入模板包
+          </button>
+          <input ref={packInputRef} type="file" accept="application/json,.json" className="hidden" onChange={handlePackImport} />
+        </div>
       </div>
       {templateReviewEnabled && filters.scope === 'review' && (
         <div className="flex flex-wrap gap-2 rounded-xl border border-amber-200 bg-amber-50/70 px-3 py-2 text-xs text-amber-700 dark:border-amber-400/20 dark:bg-amber-500/10 dark:text-amber-200">
@@ -241,11 +193,6 @@ export default function TemplateFilterBar() {
           />
         </div>
       </div>
-      <OpenPromptImportPreviewModal
-        open={previewOpen}
-        source={importSource}
-        onClose={() => setPreviewOpen(false)}
-      />
     </div>
   )
 }
