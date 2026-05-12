@@ -202,10 +202,26 @@ export default function InputBar() {
   const [nInput, setNInput] = useState(String(params.n))
   const dragCounter = useRef(0)
   const isMobile = useIsMobile()
+  const hadSelection = useRef(false)
+  const skipTransition = useRef(false)
+  if (selectedTaskIds.length > 0) {
+    hadSelection.current = true
+    skipTransition.current = false
+  } else if (hadSelection.current) {
+    hadSelection.current = false
+    skipTransition.current = true
+  }
   const desktopExpanded = isMobile || isDragging || desktopHovered || desktopFocused || selectedTaskIds.length > 0
   const desktopCollapsedOffset = isMobile
     ? 0
     : Math.max(0, desktopDockHeight)
+
+  useEffect(() => {
+    if (skipTransition.current) {
+      const id = requestAnimationFrame(() => { skipTransition.current = false })
+      return () => cancelAnimationFrame(id)
+    }
+  })
 
   const handleOptimizePrompt = useCallback(() => {
     setOptimizingPrompt(true)
@@ -738,7 +754,7 @@ export default function InputBar() {
 
           <div
             ref={dockStackRef}
-            className="pointer-events-auto transition-transform duration-300 ease-out will-change-transform"
+            className={`pointer-events-auto ease-out will-change-transform ${skipTransition.current ? '' : 'transition-transform duration-300'}`}
             onMouseEnter={() => !isMobile && setDesktopHovered(true)}
             onMouseLeave={() => !isMobile && setDesktopHovered(false)}
             onFocusCapture={() => !isMobile && setDesktopFocused(true)}
