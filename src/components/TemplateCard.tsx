@@ -91,23 +91,24 @@ export default function TemplateCard({ template }: Props) {
       onClick={() => setSelectedTemplateId(template.id)}
     >
       <div className="relative overflow-hidden" style={{ minHeight: '6rem' }}>
-        <label
-          className={`absolute top-2 right-2 z-10 flex h-5 w-5 items-center justify-center rounded border bg-white/90 backdrop-blur transition dark:bg-gray-800/90 ${isSelected ? 'border-blue-500 bg-blue-500 dark:bg-blue-500' : 'border-gray-300 opacity-0 group-hover:opacity-100 dark:border-gray-600'}`}
-          onClick={(e) => e.stopPropagation()}
+        <div
+          className={`absolute top-2 right-2 z-20 flex h-6 w-6 items-center justify-center rounded border cursor-pointer bg-white/90 backdrop-blur transition dark:bg-gray-800/90 ${isSelected ? 'border-blue-500 bg-blue-500 dark:bg-blue-500 dark:border-blue-500' : 'border-gray-300 opacity-0 group-hover:opacity-100 pointer-events-none group-hover:pointer-events-auto dark:border-gray-600'}`}
+          onClick={(e) => {
+            e.stopPropagation()
+            e.preventDefault()
+            if (isSelected) {
+              setSelectedTemplateIds(selectedTemplateIds.filter((id) => id !== template.id))
+            } else {
+              setSelectedTemplateIds([...selectedTemplateIds, template.id])
+            }
+          }}
         >
-          <input
-            type="checkbox"
-            checked={isSelected}
-            onChange={(e) => {
-              if (e.target.checked) {
-                setSelectedTemplateIds([...selectedTemplateIds, template.id])
-              } else {
-                setSelectedTemplateIds(selectedTemplateIds.filter((id) => id !== template.id))
-              }
-            }}
-            className="h-3.5 w-3.5 accent-blue-500"
-          />
-        </label>
+          {isSelected && (
+            <svg className="w-3.5 h-3.5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
+            </svg>
+          )}
+        </div>
         {coverSrc ? (
           <>
             <img

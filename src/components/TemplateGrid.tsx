@@ -1,7 +1,9 @@
-import { useMemo } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useStore } from '../store'
 import { filterTemplates, isApprovedPublicTemplate, UNASSIGNED_PROJECT_ID } from '../lib/templateUtils'
 import TemplateCard from './TemplateCard'
+
+const PAGE_SIZE = 30
 
 export default function TemplateGrid() {
   const templates = useStore((s) => s.templates)
@@ -73,6 +75,30 @@ export default function TemplateGrid() {
       },
     ].filter((section) => section.templates.length > 0)
   }, [currentProject?.name, currentProjectId, filteredTemplates, filters.scope, isGroupedProjectView])
+
+  const [visibleCount, setVisibleCount] = useState(PAGE_SIZE)
+  const sentinelRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    setVisibleCount(PAGE_SIZE)
+  }, [filteredTemplates.length, filters])
+
+  const loadMore = useCallback(() => {
+    setVisibleCount((prev) => Math.min(prev + PAGE_SIZE, filteredTemplates.length))
+  }, [filteredTemplates.length])
+
+  useEffect(() => {
+    const sentinel = sentinelRef.current
+    if (!sentinel) return
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries[0].isIntersecting) loadMore()
+      },
+      { rootMargin: '200px' },
+    )
+    observer.observe(sentinel)
+    return () => observer.disconnect()
+  }, [loadMore])
 
   if (!filteredTemplates.length) {
     const hasFilter = Boolean(
@@ -159,21 +185,25 @@ export default function TemplateGrid() {
               </div>
             )}
             <div className="columns-2 sm:columns-2 lg:columns-3 gap-3 sm:gap-4">
-              {section.templates.map((template) => (
+              {section.templates.slice(0, visibleCount).map((template) => (
                 <TemplateCard key={template.id} template={template} />
               ))}
             </div>
           </section>
         ))}
+        {visibleCount < filteredTemplates.length && <div ref={sentinelRef} className="h-10" />}
       </div>
     )
   }
 
   return (
-    <div className="columns-2 sm:columns-2 lg:columns-3 gap-3 sm:gap-4 pb-10">
-      {filteredTemplates.map((template) => (
-        <TemplateCard key={template.id} template={template} />
-      ))}
+    <div className="pb-10">
+      <div className="columns-2 sm:columns-2 lg:columns-3 gap-3 sm:gap-4">
+        {filteredTemplates.slice(0, visibleCount).map((template) => (
+          <TemplateCard key={template.id} template={template} />
+        ))}
+      </div>
+      {visibleCount < filteredTemplates.length && <div ref={sentinelRef} className="h-10" />}
     </div>
   )
 }
