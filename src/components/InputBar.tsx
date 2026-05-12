@@ -736,24 +736,9 @@ export default function InputBar() {
             </button>
           )}
 
-          <div
-            ref={dockStackRef}
-            className="pointer-events-auto transition-transform duration-300 ease-out will-change-transform"
-            onMouseEnter={() => !isMobile && setDesktopHovered(true)}
-            onMouseLeave={() => !isMobile && setDesktopHovered(false)}
-            onFocusCapture={() => !isMobile && setDesktopFocused(true)}
-            onBlurCapture={handleDesktopBlurCapture}
-            style={
-              isMobile
-                ? undefined
-                : {
-                    transform: `translateY(${desktopExpanded ? 0 : desktopCollapsedOffset}px)`,
-                  }
-            }
-          >
-            {selectedTaskIds.length > 0 && (
-              <div className="flex justify-center mb-3">
-                <div className="bg-gray-800/90 dark:bg-gray-800/90 backdrop-blur shadow-lg rounded-full flex items-center p-1 border border-white/10 pointer-events-auto">
+          {selectedTaskIds.length > 0 && (
+              <div className="flex justify-center mb-3 pointer-events-auto">
+                <div className="bg-gray-800/90 dark:bg-gray-800/90 backdrop-blur shadow-lg rounded-full flex items-center p-1 border border-white/10">
                   <button
                     onClick={clearSelection}
                     className="p-2 text-gray-300 hover:text-white transition-colors"
@@ -819,6 +804,21 @@ export default function InputBar() {
                 </div>
               </div>
             )}
+          <div
+            ref={dockStackRef}
+            className="pointer-events-auto transition-transform duration-300 ease-out will-change-transform"
+            onMouseEnter={() => !isMobile && setDesktopHovered(true)}
+            onMouseLeave={() => !isMobile && setDesktopHovered(false)}
+            onFocusCapture={() => !isMobile && setDesktopFocused(true)}
+            onBlurCapture={handleDesktopBlurCapture}
+            style={
+              isMobile
+                ? undefined
+                : {
+                    transform: `translateY(${desktopExpanded ? 0 : desktopCollapsedOffset}px)`,
+                  }
+            }
+          >
             <div ref={cardRef} className="bg-white/70 dark:bg-gray-900/70 backdrop-blur-2xl border border-white/50 dark:border-white/[0.08] shadow-[0_8px_30px_rgb(0,0,0,0.08)] dark:shadow-[0_8px_30px_rgb(0,0,0,0.3)] rounded-2xl sm:rounded-3xl p-3 sm:p-4 ring-1 ring-black/5 dark:ring-white/10">
           {/* 移动端拖动条 */}
           <div
