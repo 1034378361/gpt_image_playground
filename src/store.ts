@@ -593,9 +593,10 @@ export async function updateTemplateInStore(
 }
 
 export async function removeTemplate(templateId: string) {
-  const { templates, setTemplates, selectedTemplateId, activeTemplateId, showToast } = useStore.getState()
+  const { templates, setTemplates, templateSubmissions, setTemplateSubmissions, selectedTemplateId, activeTemplateId, showToast } = useStore.getState()
   assertServerStorageReady()
   setTemplates(templates.filter((template) => template.id !== templateId))
+  setTemplateSubmissions(templateSubmissions.filter((template) => template.id !== templateId))
   await backendApi.deleteTemplate(useStore.getState().settings, templateId)
   if (selectedTemplateId === templateId) useStore.getState().setSelectedTemplateId(null)
   if (activeTemplateId === templateId) useStore.getState().setActiveTemplateId(null)
