@@ -67,15 +67,15 @@ export default function Header() {
     <header className="safe-area-top sticky top-0 z-40 bg-white/80 dark:bg-gray-950/80 backdrop-blur border-b border-gray-200 dark:border-white/[0.08]">
       <div className="safe-area-x safe-header-inner max-w-7xl mx-auto flex items-center justify-between">
         <div className="flex items-start gap-1">
-          <h1 className="text-sm sm:text-lg font-bold tracking-tight">
+          <h1 className="text-base sm:text-lg font-bold tracking-tight">
             <a
               href={REPO_URL}
               target="_blank"
               rel="noopener noreferrer"
               className="text-gray-800 dark:text-gray-100 hover:text-gray-600 dark:hover:text-gray-300 transition-colors"
             >
-              <span className="sm:hidden">GIP</span>
-              <span className="hidden sm:inline">GPT Image Playground</span>
+              GPT Image
+              <span className="hidden sm:inline"> Playground</span>
             </a>
           </h1>
           {hasUpdate && latestRelease && (
@@ -92,7 +92,7 @@ export default function Header() {
           )}
         </div>
         <div className="flex items-center gap-0.5 sm:gap-1">
-          <div ref={statusPanelRef} className="relative">
+          <div ref={statusPanelRef} className="relative hidden sm:block">
             <button
               type="button"
               onClick={() => setShowChannelStatus((value) => !value)}
