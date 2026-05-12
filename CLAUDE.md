@@ -33,6 +33,37 @@ docker compose up --build
 npm run docker:build:single
 ```
 
+### Code Analysis Tools
+
+When performing refactoring, investigating dead code, assessing complexity, or auditing security, use these tools proactively:
+
+```bash
+# Dead code (Python) — find unused functions/classes/imports
+vulture backend/app/ --min-confidence 80
+
+# Dead code + unused deps (TypeScript) — find unused exports, files, dependencies
+npx knip
+
+# Cyclomatic complexity (Python) — identify functions needing simplification (B+ = review)
+radon cc backend/app/ -s -n B
+
+# Maintainability index (Python) — per-file score 0-100 (below 20 = hard to maintain)
+radon mi backend/app/ -s -n B
+
+# Circular dependencies (TypeScript) — detect import cycles
+madge --circular src/
+
+# Code duplication — find copy-pasted blocks across all languages
+jscpd src/ --min-lines 5 --reporters console
+jscpd backend/app/ --min-lines 5 --reporters console
+
+# Security scan (Python) — find vulnerability patterns (MEDIUM+ severity)
+bandit -r backend/app/ -ll
+
+# Dependency vulnerabilities (npm)
+npm audit
+```
+
 ## Architecture
 
 This is a multi-user image generation studio with a React SPA frontend and a FastAPI backend. The backend is required — the app does not function as a static site.
