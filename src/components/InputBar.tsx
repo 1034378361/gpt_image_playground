@@ -184,7 +184,7 @@ export default function InputBar() {
   const [moderationHintVisible, setModerationHintVisible] = useState(false)
   const [qualityHintVisible, setQualityHintVisible] = useState(false)
   const [optimizingPrompt, setOptimizingPrompt] = useState(false)
-  const [mobileCollapsed, setMobileCollapsed] = useState(false)
+  const [mobileCollapsed, setMobileCollapsed] = useState(true)
   const [desktopHovered, setDesktopHovered] = useState(false)
   const [desktopFocused, setDesktopFocused] = useState(false)
   const [desktopDockHeight, setDesktopDockHeight] = useState(0)
