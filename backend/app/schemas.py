@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 ApiMode = Literal["images", "responses"]
 CodexCliMode = Literal["auto", "standard", "codex"]
@@ -253,6 +253,20 @@ class PromptTemplateIn(BaseModel):
     formFields: list[TemplateFormField] = Field(default_factory=list)
     collections: list[str] = Field(default_factory=list)
     isFeatured: bool = False
+
+    @field_validator("prompt")
+    @classmethod
+    def prompt_not_empty(cls, v: str) -> str:
+        if not v.strip():
+            raise ValueError("提示词不能为空")
+        return v
+
+    @field_validator("externalCoverUrl")
+    @classmethod
+    def validate_cover_url(cls, v: str | None) -> str | None:
+        if v and not v.startswith(("https://", "http://")):
+            raise ValueError("封面 URL 必须以 http:// 或 https:// 开头")
+        return v
 
 
 class PromptTemplatePatch(BaseModel):

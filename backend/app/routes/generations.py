@@ -1073,16 +1073,19 @@ def _patch_generation(task_id: str, payload: GenerationTaskPatch, user: UserOut)
         return existing
     next_task = GenerationTaskOut.model_validate({**existing.model_dump(), **data})
     project_id = resolve_owned_project_id(next_task.projectId, user)
+    status_guard = ""
+    if "status" in data and data["status"] in FINAL_TASK_STATUSES:
+        status_guard = " AND status NOT IN ('done', 'error', 'canceled')"
     with get_conn() as conn:
         conn.execute(
-            """
+            f"""
             UPDATE generation_tasks SET
               template_id = ?, template_version_id = ?, project_id = ?, parent_task_id = ?, experiment_id = ?, variation_label = ?, prompt = ?, params_json = ?,
               input_image_ids_json = ?, mask_target_image_id = ?, mask_image_id = ?, output_image_ids_json = ?,
               actual_params_json = ?, actual_params_by_image_json = ?, revised_prompt_by_image_json = ?,
               status = ?, error = ?, finished_at = ?, elapsed = ?, is_favorite = ?, diagnostics_json = ?,
               channel_id = ?, api_mode = ?, model = ?
-            WHERE id = ? AND user_id = ?
+            WHERE id = ? AND user_id = ?{status_guard}
             """,
             (
                 next_task.templateId,

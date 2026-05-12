@@ -1360,6 +1360,8 @@ def submit_template(template_id: str, user: UserOut = Depends(require_user)) -> 
         return template
     if template.visibility == "public" or template.submissionStatus == "approved":
         raise HTTPException(status_code=409, detail="Template is already public")
+    if template.submissionStatus == "rejected":
+        raise HTTPException(status_code=409, detail="已被驳回的模板不能重新提交，请修改后再试")
     ts = now_ms()
     with get_conn() as conn:
         conn.execute(

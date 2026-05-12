@@ -154,6 +154,16 @@ def login(payload: AuthIn, response: Response) -> UserOut:
         ts = now_ms()
         expires_at = ts + settings.session_ttl_seconds * 1000
         conn.execute(
+            "DELETE FROM sessions WHERE user_id = ? AND (expires_at IS NOT NULL AND expires_at < ?)",
+            (row["id"], ts),
+        )
+        conn.execute(
+            """DELETE FROM sessions WHERE id IN (
+                SELECT id FROM sessions WHERE user_id = ? ORDER BY created_at DESC LIMIT -1 OFFSET 4
+            )""",
+            (row["id"],),
+        )
+        conn.execute(
             "INSERT INTO sessions (id, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)",
             (token, row["id"], ts, expires_at),
         )

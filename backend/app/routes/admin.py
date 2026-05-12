@@ -305,6 +305,7 @@ def restore_server_backup_archive(archive_bytes: bytes, response: Response, acto
             conn.execute(f"DELETE FROM {table}")
 
         for row in tables.get("users") or []:
+            imported_role = row["role"] if row["id"] == actor.id else "user"
             conn.execute(
                 """
                 INSERT INTO users (id, username, password_hash, role, created_at, updated_at)
@@ -314,7 +315,7 @@ def restore_server_backup_archive(archive_bytes: bytes, response: Response, acto
                     row["id"],
                     row["username"],
                     row["password_hash"],
-                    row["role"],
+                    imported_role,
                     row["created_at"],
                     row["updated_at"],
                 ),

@@ -129,6 +129,12 @@ def patch_project(project_id: str, payload: ProjectBoardPatch, user: UserOut = D
 def delete_project(project_id: str, user: UserOut = Depends(require_user)) -> dict[str, bool]:
     with get_conn() as conn:
         get_project_row_or_404(conn, project_id, user)
+        active = conn.execute(
+            "SELECT COUNT(*) AS count FROM generation_tasks WHERE project_id = ? AND user_id = ? AND status IN ('queued', 'running')",
+            (project_id, user.id),
+        ).fetchone()
+        if active["count"] > 0:
+            raise HTTPException(status_code=409, detail="项目中有正在执行的任务，无法删除")
         cur = conn.execute("DELETE FROM projects WHERE id = ? AND user_id = ?", (project_id, user.id))
     if cur.rowcount == 0:
         raise HTTPException(status_code=404, detail="Project not found")
