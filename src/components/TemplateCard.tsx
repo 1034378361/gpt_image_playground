@@ -87,30 +87,21 @@ export default function TemplateCard({ template }: Props) {
       className="group flex cursor-pointer flex-col overflow-hidden rounded-xl border border-gray-200 bg-white transition hover:border-gray-300 hover:shadow-lg dark:border-white/[0.08] dark:bg-gray-900 dark:hover:border-white/[0.18] dark:hover:bg-gray-800/80 break-inside-avoid mb-3 sm:mb-4"
       onClick={() => setSelectedTemplateId(template.id)}
     >
-      <div className="relative aspect-[4/5] min-h-[15rem] overflow-hidden bg-gray-100 dark:bg-black/20">
+      <div className="relative overflow-hidden" style={{ minHeight: '6rem' }}>
         {coverSrc ? (
           <>
             <img
               src={coverSrc}
-              className="absolute inset-0 h-full w-full scale-110 object-cover opacity-25 blur-2xl"
-              loading="lazy"
-              alt=""
-              aria-hidden="true"
-              onError={(e) => { (e.target as HTMLImageElement).style.display = 'none' }}
-            />
-            <div className="absolute inset-0 bg-gradient-to-b from-white/15 via-transparent to-black/10 dark:from-white/[0.04] dark:to-black/35" />
-            <img
-              src={coverSrc}
               data-image-id={template.coverImageId ?? undefined}
               data-template-id={template.id}
-              className="relative z-10 h-full w-full object-contain p-3 sm:p-4"
+              className="w-full object-contain"
               loading="lazy"
               alt=""
               onError={(e) => { (e.target as HTMLImageElement).style.display = 'none' }}
             />
           </>
         ) : (
-          <div className="flex h-full flex-col items-center justify-center gap-2 text-gray-300 dark:text-gray-600">
+          <div className="flex flex-col items-center justify-center gap-2 text-gray-300 dark:text-gray-600 py-8 bg-gray-50 dark:bg-black/20">
             <svg className="w-10 h-10" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M19.428 15.428 12 22.856l-7.428-7.428a5.25 5.25 0 0 1 7.428-7.428 5.25 5.25 0 0 1 7.428 7.428Z" />
             </svg>
