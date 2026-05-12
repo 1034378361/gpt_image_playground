@@ -92,7 +92,7 @@ export default function TemplateCard({ template }: Props) {
     >
       <div className="relative overflow-hidden" style={{ minHeight: '6rem' }}>
         <label
-          className={`absolute top-2 left-2 z-10 flex h-5 w-5 items-center justify-center rounded border bg-white/90 backdrop-blur transition dark:bg-gray-800/90 ${isSelected ? 'border-blue-500 bg-blue-500 dark:bg-blue-500' : 'border-gray-300 opacity-0 group-hover:opacity-100 dark:border-gray-600'}`}
+          className={`absolute top-2 right-2 z-10 flex h-5 w-5 items-center justify-center rounded border bg-white/90 backdrop-blur transition dark:bg-gray-800/90 ${isSelected ? 'border-blue-500 bg-blue-500 dark:bg-blue-500' : 'border-gray-300 opacity-0 group-hover:opacity-100 dark:border-gray-600'}`}
           onClick={(e) => e.stopPropagation()}
         >
           <input

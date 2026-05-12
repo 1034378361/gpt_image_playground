@@ -199,7 +199,7 @@ export default function TaskCard({
       </div>
 
       <div
-        className={`relative bg-white dark:bg-gray-900 rounded-xl border overflow-hidden cursor-pointer duration-200 hover:shadow-lg dark:hover:bg-gray-800/80 ${
+        className={`group relative bg-white dark:bg-gray-900 rounded-xl border overflow-hidden cursor-pointer duration-200 hover:shadow-lg dark:hover:bg-gray-800/80 ${
           !isSwiping ? 'transition-[box-shadow,border-color,background-color,transform]' : 'transition-[box-shadow,border-color,background-color]'
         } ${
           task.status === 'queued'
@@ -226,14 +226,17 @@ export default function TaskCard({
         onTouchEnd={handleTouchEnd}
         onTouchCancel={handleTouchCancel}
       >
-        {/* 选中时的角标 */}
-      {isSelected && (
-        <div className="absolute top-2 right-2 z-10 w-5 h-5 bg-blue-500 rounded-full flex items-center justify-center shadow-sm">
+        {/* 选中时的角标 / hover 时的复选框 */}
+      <label
+        className={`absolute top-2 right-2 z-10 flex h-5 w-5 items-center justify-center rounded-full border transition ${isSelected ? 'border-blue-500 bg-blue-500' : 'border-gray-300 bg-white/90 backdrop-blur opacity-0 group-hover:opacity-100 dark:border-gray-600 dark:bg-gray-800/90'}`}
+        onClick={(e) => { e.stopPropagation(); toggleTaskSelection(task.id) }}
+      >
+        {isSelected && (
           <svg className="w-3 h-3 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
           </svg>
-        </div>
-      )}
+        )}
+      </label>
       <div className="flex flex-col">
         {/* 图片区域 */}
         <div className="w-full bg-gray-100 dark:bg-black/20 relative flex items-center justify-center overflow-hidden" style={{ minHeight: '6rem' }}>
