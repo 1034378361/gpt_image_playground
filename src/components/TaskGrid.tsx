@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState, useEffect } from 'react'
+import { useCallback, useMemo, useRef, useState, useEffect } from 'react'
 import { useStore, reuseConfig, editOutputs, removeTask } from '../store'
 import { cancelTask, refreshQueueStats } from '../storeBackend'
 import TaskCard from './TaskCard'
@@ -51,6 +51,31 @@ export default function TaskGrid() {
     })
   }, [currentProjectId, tasks, searchQuery, filterStatus, filterFavorite])
   const hasActiveTask = tasks.some((task) => task.status === 'queued' || task.status === 'running')
+
+  const TASK_PAGE_SIZE = 30
+  const [visibleTaskCount, setVisibleTaskCount] = useState(TASK_PAGE_SIZE)
+  const taskSentinelRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    setVisibleTaskCount(TASK_PAGE_SIZE)
+  }, [searchQuery, filterStatus, filterFavorite, currentProjectId])
+
+  const loadMoreTasks = useCallback(() => {
+    setVisibleTaskCount((prev) => Math.min(prev + TASK_PAGE_SIZE, filteredTasks.length))
+  }, [filteredTasks.length])
+
+  useEffect(() => {
+    const sentinel = taskSentinelRef.current
+    if (!sentinel) return
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries[0].isIntersecting) loadMoreTasks()
+      },
+      { rootMargin: '200px' },
+    )
+    observer.observe(sentinel)
+    return () => observer.disconnect()
+  }, [loadMoreTasks])
 
   useEffect(() => {
     if (!hasActiveTask) return
@@ -217,7 +242,7 @@ export default function TaskGrid() {
     <div ref={rootRef} data-task-grid-root className="relative min-h-[50vh]">
       <GenerationQueueStatus />
       <div ref={gridRef} className="columns-2 sm:columns-2 lg:columns-3 gap-3 sm:gap-4 pb-10">
-        {filteredTasks.map((task) => (
+        {filteredTasks.slice(0, visibleTaskCount).map((task) => (
           <div key={task.id} className="task-card-wrapper break-inside-avoid mb-3 sm:mb-4" data-task-id={task.id}>
             <TaskCard
               task={task}
@@ -246,6 +271,7 @@ export default function TaskGrid() {
           </div>
         ))}
       </div>
+      {visibleTaskCount < filteredTasks.length && <div ref={taskSentinelRef} className="h-10" />}
       {selectionBox && (
         <div
           className="fixed bg-blue-500/20 border border-blue-500/50 pointer-events-none z-[100]"
