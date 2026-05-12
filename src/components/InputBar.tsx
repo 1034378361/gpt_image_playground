@@ -202,7 +202,7 @@ export default function InputBar() {
   const [nInput, setNInput] = useState(String(params.n))
   const dragCounter = useRef(0)
   const isMobile = useIsMobile()
-  const desktopExpanded = isMobile || isDragging || desktopHovered || desktopFocused
+  const desktopExpanded = isMobile || isDragging || desktopHovered || desktopFocused || selectedTaskIds.length > 0
   const desktopCollapsedOffset = isMobile
     ? 0
     : Math.max(0, desktopDockHeight)
