@@ -84,7 +84,7 @@ export default function TemplateCard({ template }: Props) {
 
   return (
     <div
-      className="group flex h-full cursor-pointer flex-col overflow-hidden rounded-xl border border-gray-200 bg-white transition hover:border-gray-300 hover:shadow-lg dark:border-white/[0.08] dark:bg-gray-900 dark:hover:border-white/[0.18] dark:hover:bg-gray-800/80"
+      className="group flex cursor-pointer flex-col overflow-hidden rounded-xl border border-gray-200 bg-white transition hover:border-gray-300 hover:shadow-lg dark:border-white/[0.08] dark:bg-gray-900 dark:hover:border-white/[0.18] dark:hover:bg-gray-800/80 break-inside-avoid mb-3 sm:mb-4"
       onClick={() => setSelectedTemplateId(template.id)}
     >
       <div className="relative aspect-[4/5] min-h-[15rem] overflow-hidden bg-gray-100 dark:bg-black/20">
@@ -96,6 +96,7 @@ export default function TemplateCard({ template }: Props) {
               loading="lazy"
               alt=""
               aria-hidden="true"
+              onError={(e) => { (e.target as HTMLImageElement).style.display = 'none' }}
             />
             <div className="absolute inset-0 bg-gradient-to-b from-white/15 via-transparent to-black/10 dark:from-white/[0.04] dark:to-black/35" />
             <img
@@ -105,6 +106,7 @@ export default function TemplateCard({ template }: Props) {
               className="relative z-10 h-full w-full object-contain p-3 sm:p-4"
               loading="lazy"
               alt=""
+              onError={(e) => { (e.target as HTMLImageElement).style.display = 'none' }}
             />
           </>
         ) : (

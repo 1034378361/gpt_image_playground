@@ -158,7 +158,7 @@ export default function TemplateGrid() {
                 </div>
               </div>
             )}
-            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            <div className="columns-2 sm:columns-2 lg:columns-3 gap-3 sm:gap-4">
               {section.templates.map((template) => (
                 <TemplateCard key={template.id} template={template} />
               ))}
@@ -170,7 +170,7 @@ export default function TemplateGrid() {
   }
 
   return (
-    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 pb-10">
+    <div className="columns-2 sm:columns-2 lg:columns-3 gap-3 sm:gap-4 pb-10">
       {filteredTemplates.map((template) => (
         <TemplateCard key={template.id} template={template} />
       ))}
