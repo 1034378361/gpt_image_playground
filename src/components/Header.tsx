@@ -67,14 +67,15 @@ export default function Header() {
     <header className="safe-area-top sticky top-0 z-40 bg-white/80 dark:bg-gray-950/80 backdrop-blur border-b border-gray-200 dark:border-white/[0.08]">
       <div className="safe-area-x safe-header-inner max-w-7xl mx-auto flex items-center justify-between">
         <div className="flex items-start gap-1">
-          <h1 className="text-lg font-bold tracking-tight">
+          <h1 className="text-sm sm:text-lg font-bold tracking-tight">
             <a
               href={REPO_URL}
               target="_blank"
               rel="noopener noreferrer"
               className="text-gray-800 dark:text-gray-100 hover:text-gray-600 dark:hover:text-gray-300 transition-colors"
             >
-              GPT Image Playground
+              <span className="sm:hidden">GIP</span>
+              <span className="hidden sm:inline">GPT Image Playground</span>
             </a>
           </h1>
           {hasUpdate && latestRelease && (
@@ -90,15 +91,15 @@ export default function Header() {
             </a>
           )}
         </div>
-        <div className="flex items-center gap-1">
+        <div className="flex items-center gap-0.5 sm:gap-1">
           <div ref={statusPanelRef} className="relative">
             <button
               type="button"
               onClick={() => setShowChannelStatus((value) => !value)}
-              className="inline-flex items-center gap-2 rounded-xl border border-gray-200 bg-white/70 px-2.5 py-1.5 text-xs text-gray-600 transition hover:bg-gray-100 dark:border-white/[0.08] dark:bg-gray-900/70 dark:text-gray-300 dark:hover:bg-white/[0.06]"
+              className="inline-flex items-center gap-1 sm:gap-2 rounded-xl border border-gray-200 bg-white/70 px-1.5 sm:px-2.5 py-1.5 text-xs text-gray-600 transition hover:bg-gray-100 dark:border-white/[0.08] dark:bg-gray-900/70 dark:text-gray-300 dark:hover:bg-white/[0.06]"
               title="查看渠道状态"
             >
-              <span className="font-medium">渠道状态</span>
+              <span className="font-medium hidden sm:inline">渠道状态</span>
               {healthSummary.total > 0 && (
                 <>
                   <span className="rounded-full bg-emerald-50 px-1.5 py-0.5 text-[10px] text-emerald-600 dark:bg-emerald-500/10 dark:text-emerald-300">
