@@ -1,20 +1,40 @@
 import { useState } from 'react'
 import { useStore } from '../store'
 import { syncServerData } from '../storeBackend'
-import { OPEN_PROMPT_LIBRARY_SOURCES, type OpenPromptLibrarySourceId } from '../lib/backendApi'
+import { dedupTemplates, OPEN_PROMPT_LIBRARY_SOURCES, type OpenPromptLibrarySourceId } from '../lib/backendApi'
 import { canManageSystem } from '../lib/roles'
 import OpenPromptImportPreviewModal from './OpenPromptImportPreviewModal'
 
 export default function AdminOpenPromptSources() {
   const openPromptSources = useStore((s) => s.openPromptSources)
   const backendUser = useStore((s) => s.backendUser)
+  const settings = useStore((s) => s.settings)
+  const showToast = useStore((s) => s.showToast)
   const [previewSource, setPreviewSource] = useState<OpenPromptLibrarySourceId | null>(null)
+  const [deduping, setDeduping] = useState(false)
 
   const sources = OPEN_PROMPT_LIBRARY_SOURCES.map((source) => ({
     ...source,
     status: openPromptSources.find((item) => item.id === source.id),
   }))
   const isAdmin = canManageSystem(backendUser)
+
+  const handleDedup = async () => {
+    setDeduping(true)
+    try {
+      const result = await dedupTemplates(settings)
+      if (result.removed > 0) {
+        showToast(`已清理 ${result.removed} 个重复模板`, 'success')
+        await syncServerData()
+      } else {
+        showToast('没有发现重复模板', 'success')
+      }
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : String(err), 'error')
+    } finally {
+      setDeduping(false)
+    }
+  }
 
   return (
     <section className="pt-6 border-t border-gray-100 dark:border-white/[0.08]">
@@ -25,13 +45,25 @@ export default function AdminOpenPromptSources() {
             {isAdmin ? '导入默认进入审核队列。' : '你可以预览并导入开源模板，也可以处理公共模板审核。'}
           </p>
         </div>
-        <button
-          type="button"
-          onClick={() => void syncServerData()}
-          className="rounded-xl bg-white px-3 py-2 text-sm text-gray-600 hover:bg-gray-100 dark:bg-white/[0.06] dark:text-gray-300 dark:hover:bg-white/[0.1]"
-        >
-          刷新
-        </button>
+        <div className="flex gap-2">
+          {isAdmin && (
+            <button
+              type="button"
+              onClick={() => void handleDedup()}
+              disabled={deduping}
+              className="rounded-xl bg-white px-3 py-2 text-sm text-gray-600 hover:bg-gray-100 disabled:opacity-50 dark:bg-white/[0.06] dark:text-gray-300 dark:hover:bg-white/[0.1]"
+            >
+              {deduping ? '清理中...' : '去重清理'}
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={() => void syncServerData()}
+            className="rounded-xl bg-white px-3 py-2 text-sm text-gray-600 hover:bg-gray-100 dark:bg-white/[0.06] dark:text-gray-300 dark:hover:bg-white/[0.1]"
+          >
+            刷新
+          </button>
+        </div>
       </div>
 
       <div className="grid gap-3 md:grid-cols-3">

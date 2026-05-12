@@ -368,6 +368,10 @@ export function batchDeleteTemplates(settings: AppSettings, ids: string[]): Prom
   })
 }
 
+export function dedupTemplates(settings: AppSettings): Promise<{ removed: number }> {
+  return request(settings, '/admin/templates/dedup', { method: 'POST' })
+}
+
 export function duplicateTemplate(settings: AppSettings, templateId: string): Promise<PromptTemplate> {
   return request(settings, `/templates/${templateId}/duplicate`, { method: 'POST' })
 }

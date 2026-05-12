@@ -1576,6 +1576,31 @@ def batch_delete_templates(payload: BatchDeleteIn, user: UserOut = Depends(requi
     return {"deleted": deleted}
 
 
+@router.post("/api/admin/templates/dedup")
+def dedup_templates(admin: UserOut = Depends(require_admin)) -> dict[str, int]:
+    removed = 0
+    with get_conn() as conn:
+        rows = conn.execute(
+            "SELECT id, title, prompt, source_name, quality_score, created_at FROM prompt_templates ORDER BY quality_score DESC, created_at ASC"
+        ).fetchall()
+        seen_prompts: dict[str, str] = {}
+        to_delete: list[str] = []
+        for row in rows:
+            prompt_text = (row["prompt"] or "").strip()
+            if not prompt_text:
+                continue
+            if prompt_text in seen_prompts:
+                to_delete.append(row["id"])
+            else:
+                seen_prompts[prompt_text] = row["id"]
+        for template_id in to_delete:
+            conn.execute("DELETE FROM prompt_templates WHERE id = ?", (template_id,))
+            removed += 1
+        if removed:
+            insert_audit_log(conn, admin, "template.dedup", "prompt_templates", "batch", {"removed": removed})
+    return {"removed": removed}
+
+
 @router.post("/api/templates/{template_id}/duplicate", response_model=PromptTemplateOut)
 def duplicate_template(template_id: str, user: UserOut = Depends(require_user)) -> PromptTemplateOut:
     source = _get_template_or_404(template_id, user)
