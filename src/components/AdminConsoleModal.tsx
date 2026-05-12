@@ -82,12 +82,12 @@ export default function AdminConsoleModal() {
   }
 
   return (
-    <div className="fixed inset-0 z-[70] p-2 sm:p-4">
+    <div className="fixed inset-0 z-[70] p-0 sm:p-4">
       <div
         className="absolute inset-0 bg-black/30 backdrop-blur-sm animate-overlay-in"
         onClick={() => setShowSettings(false)}
       />
-      <div className="relative z-10 mx-auto flex h-[calc(100vh-16px)] w-full max-w-[1520px] flex-col overflow-hidden rounded-[28px] border border-white/50 bg-white/95 shadow-2xl ring-1 ring-black/5 animate-modal-in dark:border-white/[0.08] dark:bg-gray-900/95 dark:ring-white/10 sm:h-[calc(100vh-32px)]">
+      <div className="relative z-10 mx-auto flex h-full sm:h-[calc(100vh-32px)] w-full max-w-[1520px] flex-col overflow-hidden rounded-none sm:rounded-[28px] border-0 sm:border border-white/50 bg-white/95 shadow-2xl ring-0 sm:ring-1 ring-black/5 animate-modal-in dark:border-white/[0.08] dark:bg-gray-900/95 dark:ring-white/10">
         {/* Header */}
         <div className="sticky top-0 z-10 border-b border-gray-200/80 bg-white/90 px-5 py-4 backdrop-blur dark:border-white/[0.08] dark:bg-gray-900/90 sm:px-6">
           <div className="flex items-center justify-between gap-4">
@@ -114,25 +114,7 @@ export default function AdminConsoleModal() {
         </div>
 
         {/* Body: tabs + content */}
-        <div className="flex flex-1 overflow-hidden">
-          {/* Sidebar - desktop */}
-          <nav className="hidden w-48 shrink-0 flex-col gap-1 overflow-y-auto border-r border-gray-200/80 bg-gray-50/50 p-3 dark:border-white/[0.08] dark:bg-white/[0.02] sm:flex">
-            {availableTabs.map((tab) => (
-              <button
-                key={tab.id}
-                type="button"
-                onClick={() => setActiveTab(tab.id)}
-                className={`rounded-xl px-3 py-2.5 text-left text-sm transition ${
-                  currentTab === tab.id
-                    ? 'bg-white font-medium text-gray-800 shadow-sm ring-1 ring-gray-200/70 dark:bg-white/[0.08] dark:text-gray-100 dark:ring-white/[0.08]'
-                    : 'text-gray-600 hover:bg-white/80 hover:text-gray-800 dark:text-gray-400 dark:hover:bg-white/[0.04] dark:hover:text-gray-200'
-                }`}
-              >
-                {tab.label}
-              </button>
-            ))}
-          </nav>
-
+        <div className="flex flex-col sm:flex-row flex-1 overflow-hidden">
           {/* Tab bar - mobile */}
           <div className="flex overflow-x-auto border-b border-gray-200/80 bg-gray-50/50 px-3 py-2 dark:border-white/[0.08] dark:bg-white/[0.02] sm:hidden">
             {availableTabs.map((tab) => (
@@ -150,6 +132,24 @@ export default function AdminConsoleModal() {
               </button>
             ))}
           </div>
+
+          {/* Sidebar - desktop */}
+          <nav className="hidden w-48 shrink-0 flex-col gap-1 overflow-y-auto border-r border-gray-200/80 bg-gray-50/50 p-3 dark:border-white/[0.08] dark:bg-white/[0.02] sm:flex">
+            {availableTabs.map((tab) => (
+              <button
+                key={tab.id}
+                type="button"
+                onClick={() => setActiveTab(tab.id)}
+                className={`rounded-xl px-3 py-2.5 text-left text-sm transition ${
+                  currentTab === tab.id
+                    ? 'bg-white font-medium text-gray-800 shadow-sm ring-1 ring-gray-200/70 dark:bg-white/[0.08] dark:text-gray-100 dark:ring-white/[0.08]'
+                    : 'text-gray-600 hover:bg-white/80 hover:text-gray-800 dark:text-gray-400 dark:hover:bg-white/[0.04] dark:hover:text-gray-200'
+                }`}
+              >
+                {tab.label}
+              </button>
+            ))}
+          </nav>
 
           {/* Content panel */}
           <div className="flex-1 overflow-y-auto px-5 py-5 custom-scrollbar sm:px-6">
