@@ -464,33 +464,3 @@ export interface ServerAsset {
   visualHash?: string | null
   createdAt: number
 }
-
-// ===== API 请求体 =====
-
-export interface ImageGenerationRequest {
-  model: string
-  prompt: string
-  size: string
-  quality: string
-  output_format: string
-  moderation: string
-  output_compression?: number
-  n?: number
-}
-
-// ===== 导出数据 =====
-
-/** ZIP manifest.json 格式 */
-export interface ExportData {
-  version: number
-  exportedAt: string
-  settings: AppSettings
-  tasks: TaskRecord[]
-  templates?: PromptTemplate[]
-  /** imageId → 图片信息 */
-  imageFiles: Record<string, {
-    path: string
-    createdAt?: number
-    source?: 'upload' | 'generated' | 'mask'
-  }>
-}

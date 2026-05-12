@@ -465,12 +465,13 @@ async function executeServerTask(taskId: string) {
   const timeoutSeconds = channel?.timeoutSeconds ?? 300
 
   try {
-    const inputDataUrls: string[] = []
-    for (const imgId of task.inputImageIds) {
-      const dataUrl = await ensureImageCached(imgId)
-      if (!dataUrl) throw new Error('输入图片已不存在')
-      inputDataUrls.push(dataUrl)
-    }
+    const inputDataUrls = await Promise.all(
+      task.inputImageIds.map(async (imgId) => {
+        const dataUrl = await ensureImageCached(imgId)
+        if (!dataUrl) throw new Error('输入图片已不存在')
+        return dataUrl
+      }),
+    )
     let maskDataUrl: string | undefined
     if (task.maskImageId) {
       maskDataUrl = await ensureImageCached(task.maskImageId)
