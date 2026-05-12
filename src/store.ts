@@ -196,6 +196,7 @@ interface AppState {
   setSelectedTemplateId: (id: string | null) => void
   selectedTemplateIds: string[]
   setSelectedTemplateIds: (ids: string[]) => void
+  toggleTemplateSelection: (id: string) => void
   templateEditor:
     | { mode: 'create' }
     | { mode: 'fromCurrent' }
@@ -382,6 +383,10 @@ export const useStore = create<AppState>()(
       setSelectedTemplateId: (selectedTemplateId) => set({ selectedTemplateId }),
       selectedTemplateIds: [],
       setSelectedTemplateIds: (selectedTemplateIds) => set({ selectedTemplateIds }),
+      toggleTemplateSelection: (id) => set((s) => {
+        const has = s.selectedTemplateIds.includes(id)
+        return { selectedTemplateIds: has ? s.selectedTemplateIds.filter((x) => x !== id) : [...s.selectedTemplateIds, id] }
+      }),
       templateEditor: null,
       setTemplateEditor: (templateEditor) => set({ templateEditor }),
       templateVariableTemplateId: null,
