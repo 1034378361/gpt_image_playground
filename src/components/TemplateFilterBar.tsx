@@ -1,5 +1,5 @@
 import { useMemo, useRef, type ChangeEvent } from 'react'
-import { exportTemplatePack, removeMultipleTemplates, useStore } from '../store'
+import { exportTemplatePack, useStore } from '../store'
 import { importTemplatePackFile } from '../storeBackend'
 import {
   ALL_TEMPLATE_CATEGORIES,
@@ -21,9 +21,6 @@ export default function TemplateFilterBar() {
   const filters = useStore((s) => s.templateFilters)
   const setTemplateFilters = useStore((s) => s.setTemplateFilters)
   const currentProjectId = useStore((s) => s.currentProjectId)
-  const selectedTemplateIds = useStore((s) => s.selectedTemplateIds)
-  const setSelectedTemplateIds = useStore((s) => s.setSelectedTemplateIds)
-  const setConfirmDialog = useStore((s) => s.setConfirmDialog)
   const packInputRef = useRef<HTMLInputElement>(null)
 
   const sourceTemplates = useMemo(() => {
@@ -87,33 +84,6 @@ export default function TemplateFilterBar() {
           <span>待审核 {reviewSummary.total}</span>
           <span>70+ 高分 {reviewSummary.highQuality}</span>
           <span>带样例 {reviewSummary.withSamples}</span>
-        </div>
-      )}
-      {selectedTemplateIds.length > 0 && (
-        <div className="flex items-center gap-2 rounded-xl border border-red-200 bg-red-50/70 px-3 py-2 dark:border-red-400/20 dark:bg-red-500/10">
-          <span className="text-xs text-red-700 dark:text-red-200">已选 {selectedTemplateIds.length} 个模板</span>
-          <button
-            type="button"
-            onClick={() => {
-              setConfirmDialog({
-                title: '批量删除模板',
-                message: `确定要删除选中的 ${selectedTemplateIds.length} 个模板吗？此操作不可撤销。`,
-                action: () => {
-                  void removeMultipleTemplates(selectedTemplateIds).then(() => setSelectedTemplateIds([]))
-                },
-              })
-            }}
-            className="rounded-lg bg-red-500 px-2.5 py-1 text-xs font-medium text-white hover:bg-red-600"
-          >
-            批量删除
-          </button>
-          <button
-            type="button"
-            onClick={() => setSelectedTemplateIds([])}
-            className="rounded-lg bg-white px-2.5 py-1 text-xs text-gray-600 hover:bg-gray-100 dark:bg-white/[0.06] dark:text-gray-300 dark:hover:bg-white/[0.1]"
-          >
-            取消选择
-          </button>
         </div>
       )}
       <div className="flex flex-col gap-2 sm:gap-3 sm:flex-row">
