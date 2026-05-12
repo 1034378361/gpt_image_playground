@@ -71,6 +71,8 @@ def register(payload: AuthRegisterIn, response: Response) -> UserOut:
     username = payload.username.strip()
     if not username:
         raise HTTPException(status_code=400, detail="Username is required")
+    if len(payload.password) < 6:
+        raise HTTPException(status_code=400, detail="密码至少需要 6 个字符")
 
     user_id = new_id()
     ts = now_ms()

@@ -1,12 +1,10 @@
 from __future__ import annotations
 
-import asyncio
 import hashlib
 import json
 import re
-import time
 from typing import Any
-from urllib.parse import quote_plus, urljoin, urlparse
+from urllib.parse import urljoin
 
 import httpx
 from fastapi import APIRouter, Body, Depends, HTTPException, Query
@@ -16,11 +14,7 @@ from ..assets import asset_is_publicly_visible
 from ..config import settings
 from ..db import get_conn
 from ..schemas import (
-    AutoImportRunOut,
-    AutoImportSettingsOut,
-    AutoImportSettingsPatch,
     ChannelModel,
-    OpenPromptDiscoveryOut,
     OpenPromptImportIn,
     OpenPromptPreviewItemOut,
     OpenPromptPreviewOut,
@@ -40,7 +34,6 @@ from ..schemas import (
 )
 from ..security import new_id, now_ms
 from ..helpers import (
-    api_key_preview,
     compact_message,
     get_enabled_channel_model,
     insert_audit_log,
@@ -50,11 +43,8 @@ from ..helpers import (
     row_to_channel,
     row_to_template,
     row_to_template_version,
-    row_to_user,
 )
 from ..state import (
-    AUTO_IMPORT_LOCK,
-    DEFAULT_AUTO_IMPORT_SETTINGS,
     OpenPromptSource,
 )
 from ..dependencies import require_admin, require_template_operator, require_user
@@ -65,190 +55,6 @@ router = APIRouter(tags=["templates"])
 # ---------------------------------------------------------------------------
 # Helper functions (private to this module)
 # ---------------------------------------------------------------------------
-
-
-def _normalize_trusted_repo_value(value: str) -> str:
-    raw = str(value or "").strip()
-    if not raw:
-        return ""
-    if raw.startswith("http://") or raw.startswith("https://"):
-        parsed = urlparse(raw)
-        parts = [part for part in parsed.path.strip("/").split("/") if part]
-        if len(parts) >= 2 and "github.com" in parsed.netloc.lower():
-            return f"{parts[0]}/{parts[1].removesuffix('.git')}".lower()
-    if raw.lower().startswith("github.com/"):
-        parts = [part for part in raw.split("/", 1)[1].strip("/").split("/") if part]
-        if len(parts) >= 2:
-            return f"{parts[0]}/{parts[1].removesuffix('.git')}".lower()
-    if re.match(r"^[\w.-]+/[\w.-]+(?:\.git)?$", raw):
-        owner, repo = raw.split("/", 1)
-        return f"{owner}/{repo.removesuffix('.git')}".lower()
-    return raw.lower()
-
-
-def _normalize_repo_from_url(url: str) -> str:
-    return _normalize_trusted_repo_value(url)
-
-
-def _unique_clean_strings(values: list[str] | None, *, limit: int, max_len: int) -> list[str]:
-    seen: set[str] = set()
-    results: list[str] = []
-    for raw in values or []:
-        value = re.sub(r"\s+", " ", str(raw or "")).strip()
-        if not value:
-            continue
-        value = value[:max_len]
-        key = value.lower()
-        if key in seen:
-            continue
-        seen.add(key)
-        results.append(value)
-        if len(results) >= limit:
-            break
-    return results
-
-
-def _sanitize_auto_import_settings(data: dict[str, Any] | None) -> dict[str, Any]:
-    merged = {**DEFAULT_AUTO_IMPORT_SETTINGS, **(data or {})}
-    search_queries = _unique_clean_strings(merged.get("searchQueries"), limit=12, max_len=120)
-    trusted_repos = [
-        normalized
-        for normalized in (
-            _normalize_trusted_repo_value(value)
-            for value in _unique_clean_strings(merged.get("trustedRepos"), limit=50, max_len=200)
-        )
-        if normalized
-    ]
-    if not search_queries:
-        search_queries = list(DEFAULT_AUTO_IMPORT_SETTINGS["searchQueries"])
-    return {
-        "enabled": bool(merged.get("enabled")),
-        "runHour": max(0, min(23, int(merged.get("runHour") or 0))),
-        "searchQueries": search_queries,
-        "trustedRepos": sorted(set(trusted_repos)),
-        "includeKnownSources": bool(merged.get("includeKnownSources")),
-        "autoApproveTrusted": bool(merged.get("autoApproveTrusted")),
-        "maxRepositories": max(1, min(50, int(merged.get("maxRepositories") or 1))),
-        "maxTemplatesPerRun": max(1, min(300, int(merged.get("maxTemplatesPerRun") or 1))),
-        "minHotScore": max(0.0, min(10000.0, float(merged.get("minHotScore") or 0))),
-    }
-
-
-def _local_day_key(ts_ms: int | None) -> str:
-    if not ts_ms:
-        return ""
-    local = time.localtime(ts_ms / 1000)
-    return f"{local.tm_year}-{local.tm_yday}"
-
-
-def _local_run_time_ms(run_hour: int, reference_ms: int) -> int:
-    local = time.localtime(reference_ms / 1000)
-    return int(
-        time.mktime(
-            (
-                local.tm_year,
-                local.tm_mon,
-                local.tm_mday,
-                max(0, min(23, run_hour)),
-                0,
-                0,
-                local.tm_wday,
-                local.tm_yday,
-                local.tm_isdst,
-            )
-        )
-        * 1000
-    )
-
-
-def _next_auto_import_run_at(data: dict[str, Any]) -> int | None:
-    if not data.get("enabled"):
-        return None
-    ts = now_ms()
-    candidate = _local_run_time_ms(int(data.get("runHour") or 0), ts)
-    last_run_at = data.get("lastRunAt")
-    if last_run_at and _local_day_key(int(last_run_at)) == _local_day_key(ts):
-        return candidate + 24 * 60 * 60 * 1000
-    if candidate <= ts:
-        return ts
-    return candidate
-
-
-def should_run_auto_import_now(data: dict[str, Any]) -> bool:
-    if not data.get("enabled"):
-        return False
-    ts = now_ms()
-    if ts < _local_run_time_ms(int(data.get("runHour") or 0), ts):
-        return False
-    last_run_at = data.get("lastRunAt")
-    return not last_run_at or _local_day_key(int(last_run_at)) != _local_day_key(ts)
-
-
-def read_auto_import_settings() -> tuple[dict[str, Any], str]:
-    with get_conn() as conn:
-        row = conn.execute("SELECT * FROM auto_import_settings WHERE id = 'default'").fetchone()
-    if not row:
-        return _sanitize_auto_import_settings({}), ""
-    data = _sanitize_auto_import_settings(json_loads(row["settings_json"], {}))
-    data["lastRunAt"] = row["last_run_at"]
-    data["updatedAt"] = row["updated_at"]
-    return data, row["github_token"] or ""
-
-
-def _auto_import_settings_out(data: dict[str, Any], github_token: str) -> AutoImportSettingsOut:
-    return AutoImportSettingsOut(
-        enabled=bool(data.get("enabled")),
-        runHour=int(data.get("runHour") or 0),
-        githubTokenPreview=api_key_preview(github_token),
-        searchQueries=list(data.get("searchQueries") or []),
-        trustedRepos=list(data.get("trustedRepos") or []),
-        includeKnownSources=bool(data.get("includeKnownSources")),
-        autoApproveTrusted=bool(data.get("autoApproveTrusted")),
-        maxRepositories=int(data.get("maxRepositories") or 1),
-        maxTemplatesPerRun=int(data.get("maxTemplatesPerRun") or 1),
-        minHotScore=float(data.get("minHotScore") or 0),
-        lastRunAt=data.get("lastRunAt"),
-        nextRunAt=_next_auto_import_run_at(data),
-        updatedAt=data.get("updatedAt"),
-    )
-
-
-def _row_to_auto_import_run(row: Any) -> AutoImportRunOut:
-    return AutoImportRunOut(
-        id=row["id"],
-        status=row["status"],
-        trigger=row["trigger"],
-        startedAt=row["started_at"],
-        finishedAt=row["finished_at"],
-        discoveredRepositories=int(row["discovered_repositories"] or 0),
-        selectedRepositories=int(row["selected_repositories"] or 0),
-        created=int(row["created"] or 0),
-        updated=int(row["updated"] or 0),
-        skipped=int(row["skipped"] or 0),
-        submitted=int(row["submitted"] or 0),
-        approved=int(row["approved"] or 0),
-        message=row["message"] or "",
-        details=json_loads(row["details_json"], {}),
-    )
-
-
-def _row_to_open_prompt_discovery(row: Any) -> OpenPromptDiscoveryOut:
-    return OpenPromptDiscoveryOut(
-        id=row["id"],
-        sourceId=row["source_id"],
-        label=row["label"],
-        repoUrl=row["repo_url"],
-        description=row["description"] or "",
-        stars=int(row["stars"] or 0),
-        forks=int(row["forks"] or 0),
-        hotScore=float(row["hot_score"] or 0),
-        promptCount=int(row["prompt_count"] or 0),
-        licenseName=row["license_name"] or "",
-        lastSeenAt=row["last_seen_at"],
-        lastImportedAt=row["last_imported_at"],
-        lastStatus=row["last_status"] or "",
-        lastMessage=row["last_message"] or "",
-    )
 
 
 def _validate_template_channel_selection(channel_id: str | None, api_mode: str, model_id: str) -> None:
@@ -365,38 +171,54 @@ def _calculate_template_quality(
     rating_total: int = 0,
     rating_count: int = 0,
 ) -> float:
-    score = 20.0
-    prompt_len = len(prompt.strip())
-    if prompt_len >= 120:
-        score += 16
-    elif prompt_len >= 60:
-        score += 9
-    if prompt_len <= 4000:
-        score += 7
-    if title.strip() and len(title.strip()) <= 80:
-        score += 6
-    if category.strip():
-        score += 6
-    score += min(len(tags), 6) * 2
-    if cover_image_id or external_cover_url:
-        score += 8
-    if example_images:
-        score += min(len(example_images), 6) * 2
-    if source_name.strip():
-        score += 4
-    if negative_prompt:
-        score += 2
-    score += min(_template_variable_count(prompt, negative_prompt), 6) * 1.5
+    score = 0.0
 
+    # --- Prompt content quality (max 35) ---
+    prompt_text = prompt.strip()
+    prompt_len = len(prompt_text)
+    if prompt_len >= 200:
+        score += 18
+    elif prompt_len >= 120:
+        score += 14
+    elif prompt_len >= 60:
+        score += 8
+    elif prompt_len >= 20:
+        score += 3
+
+    combined = f"{title} {prompt_text} {category} {' '.join(tags)}".lower()
+    relevance_hits = _count_term_hits(combined, IMAGE_PROMPT_POSITIVE_TERMS)
+    score += min(relevance_hits, 7) * 2.5  # max +17.5
+
+    # --- Structure & metadata (max 25) ---
+    if title.strip() and len(title.strip()) <= 80:
+        score += 5
+    if category.strip():
+        score += 4
+    score += min(len(tags), 5) * 1.5  # max +7.5
+    if negative_prompt and len(negative_prompt.strip()) >= 10:
+        score += 3
+    var_count = _template_variable_count(prompt, negative_prompt)
+    score += min(var_count, 4) * 1.5  # max +6
+
+    # --- Visual assets (max 12) ---
+    if cover_image_id or external_cover_url:
+        score += 5
+    if example_images:
+        score += min(len(example_images), 4) * 1.75  # max +7
+
+    # --- Usage signals (max 28) ---
     total_generations = max(0, success_count) + max(0, failure_count)
-    if total_generations:
-        score += (max(0, success_count) / total_generations) * 14
-        score += min(max(0, success_count), 12) * 0.45
-    score += min(max(0, usage_count), 40) / 40 * 7
-    score += min(max(0, favorite_count), 20) / 20 * 5
+    if total_generations >= 3:
+        success_rate = max(0, success_count) / total_generations
+        score += success_rate * 12  # max +12
+    score += min(max(0, success_count), 20) * 0.3  # max +6
+    score += min(max(0, usage_count), 50) / 50 * 4  # max +4
+    score += min(max(0, favorite_count), 20) / 20 * 4  # max +4
     if rating_count > 0:
-        score += (max(0, rating_total) / rating_count) / 5 * 12
-        score += min(rating_count, 10) / 10 * 2
+        avg_rating = max(0, rating_total) / rating_count
+        score += (avg_rating / 5) * 8  # max +8
+        score += min(rating_count, 10) / 10 * 2  # max +2 (confidence bonus)
+
     return round(max(0.0, min(score, 100.0)), 1)
 
 
@@ -642,13 +464,22 @@ def _open_prompt_exists(conn: Any, prompt_source: OpenPromptSource, item: dict[s
         ).fetchone()
         if exists:
             return exists
-    return conn.execute(
+    same_source = conn.execute(
         """
         SELECT id FROM prompt_templates
         WHERE source_name = ? AND title = ? AND source_author = ?
         """,
         (prompt_source.source_name, item["title"], item["sourceAuthor"]),
     ).fetchone()
+    if same_source:
+        return same_source
+    prompt_text = str(item.get("prompt") or "").strip()
+    if prompt_text:
+        return conn.execute(
+            "SELECT id FROM prompt_templates WHERE prompt = ? LIMIT 1",
+            (prompt_text,),
+        ).fetchone()
+    return None
 
 
 def _text_matches_any(text: str, patterns: tuple[str, ...]) -> bool:
@@ -1167,408 +998,6 @@ def _upsert_open_prompt_items(
         "approved": approved,
     }
 
-
-def _repository_source_id(repo_name: str) -> str:
-    value = re.sub(r"[^a-z0-9]+", "-", repo_name.lower()).strip("-")
-    return f"github-{value[:80]}" if value else f"github-{new_id()}"
-
-
-def _repository_hot_score(stars: int, forks: int, prompt_count: int, license_name: str, updated_at: str = "") -> float:
-    recency_bonus = 0.0
-    if updated_at:
-        try:
-            updated = time.mktime(time.strptime(updated_at[:19], "%Y-%m-%dT%H:%M:%S"))
-            age_days = max(0.0, (time.time() - updated) / 86400)
-            if age_days <= 30:
-                recency_bonus = 40
-            elif age_days <= 180:
-                recency_bonus = 20
-            elif age_days <= 365:
-                recency_bonus = 8
-        except ValueError:
-            recency_bonus = 0.0
-    license_bonus = 8 if license_name else 0
-    return round(max(0.0, stars + forks * 2 + prompt_count * 2.5 + recency_bonus + license_bonus), 1)
-
-
-def _github_headers(github_token: str) -> dict[str, str]:
-    headers = {"Accept": "application/vnd.github+json", "User-Agent": "gpt-image-playground"}
-    if github_token.strip():
-        headers["Authorization"] = f"Bearer {github_token.strip()}"
-    return headers
-
-
-async def _fetch_github_readme(
-    client: httpx.AsyncClient,
-    full_name: str,
-    default_branch: str,
-) -> tuple[str, str, str] | None:
-    branch = default_branch or "main"
-    raw_base_url = f"https://raw.githubusercontent.com/{full_name}/{branch}/"
-    for filename in ("README.md", "readme.md", "README.MD"):
-        readme_url = urljoin(raw_base_url, filename)
-        try:
-            response = await client.get(readme_url)
-            if response.status_code == 200 and response.text.strip():
-                return readme_url, raw_base_url, response.text
-        except httpx.HTTPError:
-            continue
-    return None
-
-
-def _upsert_open_prompt_discovery(candidate: dict[str, Any], status: str, message: str, imported_at: int | None = None) -> None:
-    ts = now_ms()
-    with get_conn() as conn:
-        existing = conn.execute(
-            "SELECT id FROM open_prompt_discoveries WHERE repo_url = ?",
-            (candidate["repoUrl"],),
-        ).fetchone()
-        discovery_id = existing["id"] if existing else new_id()
-        if existing:
-            conn.execute(
-                """
-                UPDATE open_prompt_discoveries SET
-                  source_id = ?, label = ?, description = ?, stars = ?, forks = ?, hot_score = ?,
-                  prompt_count = ?, license_name = ?, last_seen_at = ?,
-                  last_imported_at = COALESCE(?, last_imported_at), last_status = ?, last_message = ?
-                WHERE id = ?
-                """,
-                (
-                    candidate["source"].id,
-                    candidate["label"],
-                    candidate.get("description", ""),
-                    int(candidate.get("stars", 0)),
-                    int(candidate.get("forks", 0)),
-                    float(candidate.get("hotScore", 0)),
-                    int(candidate.get("promptCount", 0)),
-                    candidate.get("licenseName", ""),
-                    ts,
-                    imported_at,
-                    status,
-                    compact_message(message),
-                    discovery_id,
-                ),
-            )
-        else:
-            conn.execute(
-                """
-                INSERT INTO open_prompt_discoveries (
-                  id, source_id, label, repo_url, description, stars, forks, hot_score,
-                  prompt_count, license_name, last_seen_at, last_imported_at, last_status, last_message
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    discovery_id,
-                    candidate["source"].id,
-                    candidate["label"],
-                    candidate["repoUrl"],
-                    candidate.get("description", ""),
-                    int(candidate.get("stars", 0)),
-                    int(candidate.get("forks", 0)),
-                    float(candidate.get("hotScore", 0)),
-                    int(candidate.get("promptCount", 0)),
-                    candidate.get("licenseName", ""),
-                    ts,
-                    imported_at,
-                    status,
-                    compact_message(message),
-                ),
-            )
-
-
-async def _discover_known_open_prompt_sources(settings_data: dict[str, Any]) -> list[dict[str, Any]]:
-    if not settings_data.get("includeKnownSources"):
-        return []
-    candidates: list[dict[str, Any]] = []
-    per_source_limit = max(1, int(settings_data.get("maxTemplatesPerRun") or 80))
-    for source in OPEN_PROMPT_SOURCES.values():
-        try:
-            items = await _fetch_open_prompt_items(source, per_source_limit)
-        except HTTPException as exc:
-            candidate = {
-                "source": source,
-                "label": source.label,
-                "repoUrl": source.repo_url,
-                "description": "内置开源提示词库",
-                "stars": 0,
-                "forks": 0,
-                "hotScore": 0,
-                "promptCount": 0,
-                "licenseName": source.license_name,
-                "items": [],
-            }
-            _upsert_open_prompt_discovery(candidate, "error", str(exc.detail))
-            continue
-        candidate = {
-            "source": source,
-            "label": source.label,
-            "repoUrl": source.repo_url,
-            "description": "内置开源提示词库",
-            "stars": 0,
-            "forks": 0,
-            "hotScore": round(250 + len(items) * 2.5, 1),
-            "promptCount": len(items),
-            "licenseName": source.license_name,
-            "items": items,
-        }
-        _upsert_open_prompt_discovery(candidate, "discovered", f"发现 {len(items)} 个模板")
-        candidates.append(candidate)
-    return candidates
-
-
-async def _discover_github_open_prompt_sources(settings_data: dict[str, Any], github_token: str) -> list[dict[str, Any]]:
-    queries = settings_data.get("searchQueries") or DEFAULT_AUTO_IMPORT_SETTINGS["searchQueries"]
-    max_repositories = int(settings_data.get("maxRepositories") or 12)
-    headers = _github_headers(github_token)
-    candidates: list[dict[str, Any]] = []
-    seen_repos: set[str] = set()
-    per_query = max(5, min(20, max_repositories * 2))
-
-    async with httpx.AsyncClient(timeout=30) as client:
-        for query in queries:
-            search_url = (
-                "https://api.github.com/search/repositories"
-                f"?q={quote_plus(f'{query} in:name,description,readme')}&sort=stars&order=desc&per_page={per_query}"
-            )
-            try:
-                response = await client.get(search_url, headers=headers)
-                response.raise_for_status()
-                repos = response.json().get("items", [])
-            except (httpx.HTTPError, ValueError):
-                continue
-
-            for repo in repos:
-                full_name = str(repo.get("full_name") or "").strip()
-                repo_url = str(repo.get("html_url") or "").strip()
-                if not full_name or not repo_url:
-                    continue
-                repo_key = full_name.lower()
-                if repo_key in seen_repos:
-                    continue
-                seen_repos.add(repo_key)
-                readme = await _fetch_github_readme(client, full_name, str(repo.get("default_branch") or "main"))
-                if not readme:
-                    continue
-                readme_url, raw_base_url, markdown = readme
-                license_info = repo.get("license") if isinstance(repo.get("license"), dict) else {}
-                license_name = str(license_info.get("spdx_id") or license_info.get("name") or "").strip()
-                source = OpenPromptSource(
-                    id=_repository_source_id(full_name),
-                    label=full_name,
-                    readme_url=readme_url,
-                    repo_url=repo_url,
-                    raw_base_url=raw_base_url,
-                    source_name=f"GitHub {full_name}",
-                    license_name=license_name,
-                    parser=_parse_generic_prompt_readme,
-                )
-                parsed = [_normalize_open_prompt_item(source, item) for item in source.parser(source, markdown)]
-                if not parsed:
-                    continue
-                stars = int(repo.get("stargazers_count") or 0)
-                forks = int(repo.get("forks_count") or 0)
-                hot_score = _repository_hot_score(stars, forks, len(parsed), license_name, str(repo.get("pushed_at") or repo.get("updated_at") or ""))
-                candidate = {
-                    "source": source,
-                    "label": full_name,
-                    "repoUrl": repo_url,
-                    "description": str(repo.get("description") or ""),
-                    "stars": stars,
-                    "forks": forks,
-                    "hotScore": hot_score,
-                    "promptCount": len(parsed),
-                    "licenseName": license_name,
-                    "items": parsed,
-                }
-                _upsert_open_prompt_discovery(candidate, "discovered", f"发现 {len(parsed)} 个模板")
-                candidates.append(candidate)
-                if len(candidates) >= max_repositories * 3:
-                    return candidates
-    return candidates
-
-
-async def _discover_auto_import_candidates(settings_data: dict[str, Any], github_token: str) -> list[dict[str, Any]]:
-    known, github = await asyncio.gather(
-        _discover_known_open_prompt_sources(settings_data),
-        _discover_github_open_prompt_sources(settings_data, github_token),
-    )
-    deduped: dict[str, dict[str, Any]] = {}
-    for candidate in [*known, *github]:
-        repo_key = _normalize_repo_from_url(candidate["repoUrl"]) or candidate["repoUrl"].lower()
-        current = deduped.get(repo_key)
-        if not current or float(candidate.get("hotScore", 0)) > float(current.get("hotScore", 0)):
-            deduped[repo_key] = candidate
-    return sorted(deduped.values(), key=lambda item: float(item.get("hotScore", 0)), reverse=True)
-
-
-def _source_is_trusted(candidate: dict[str, Any], trusted_repos: list[str]) -> bool:
-    trusted = {_normalize_trusted_repo_value(value) for value in trusted_repos if _normalize_trusted_repo_value(value)}
-    source: OpenPromptSource = candidate["source"]
-    keys = {
-        source.id.lower(),
-        source.source_name.lower(),
-        _normalize_repo_from_url(source.repo_url),
-        _normalize_repo_from_url(candidate["repoUrl"]),
-    }
-    return bool(trusted & {key for key in keys if key})
-
-
-def _first_admin_user() -> UserOut | None:
-    with get_conn() as conn:
-        row = conn.execute("SELECT * FROM users WHERE role = 'admin' ORDER BY created_at ASC LIMIT 1").fetchone()
-    return row_to_user(row) if row else None
-
-
-def _create_auto_import_run(trigger: str) -> str:
-    run_id = new_id()
-    with get_conn() as conn:
-        conn.execute(
-            """
-            INSERT INTO auto_import_runs (id, status, trigger, started_at)
-            VALUES (?, 'running', ?, ?)
-            """,
-            (run_id, trigger, now_ms()),
-        )
-    return run_id
-
-
-def _finish_auto_import_run(
-    run_id: str,
-    *,
-    status: str,
-    message: str,
-    metrics: dict[str, int],
-    details: dict[str, Any],
-) -> AutoImportRunOut:
-    ts = now_ms()
-    with get_conn() as conn:
-        conn.execute(
-            """
-            UPDATE auto_import_runs SET
-              status = ?, finished_at = ?, discovered_repositories = ?, selected_repositories = ?,
-              created = ?, updated = ?, skipped = ?, submitted = ?, approved = ?,
-              message = ?, details_json = ?
-            WHERE id = ?
-            """,
-            (
-                status,
-                ts,
-                int(metrics.get("discoveredRepositories", 0)),
-                int(metrics.get("selectedRepositories", 0)),
-                int(metrics.get("created", 0)),
-                int(metrics.get("updated", 0)),
-                int(metrics.get("skipped", 0)),
-                int(metrics.get("submitted", 0)),
-                int(metrics.get("approved", 0)),
-                compact_message(message),
-                json_dumps(details),
-                run_id,
-            ),
-        )
-        conn.execute(
-            """
-            INSERT INTO auto_import_settings (id, settings_json, github_token, last_run_at, updated_at)
-            VALUES ('default', ?, '', ?, ?)
-            ON CONFLICT(id) DO UPDATE SET last_run_at = excluded.last_run_at
-            """,
-            (json_dumps(_sanitize_auto_import_settings({})), ts, ts),
-        )
-        row = conn.execute("SELECT * FROM auto_import_runs WHERE id = ?", (run_id,)).fetchone()
-    return _row_to_auto_import_run(row)
-
-
-async def perform_auto_import(trigger: str, actor: UserOut) -> AutoImportRunOut:
-    if AUTO_IMPORT_LOCK.locked():
-        raise HTTPException(status_code=409, detail="Auto import is already running")
-
-    async with AUTO_IMPORT_LOCK:
-        run_id = _create_auto_import_run(trigger)
-        settings_data, github_token = read_auto_import_settings()
-        metrics = {
-            "discoveredRepositories": 0,
-            "selectedRepositories": 0,
-            "created": 0,
-            "updated": 0,
-            "skipped": 0,
-            "submitted": 0,
-            "approved": 0,
-        }
-        details: dict[str, Any] = {"repositories": []}
-        try:
-            candidates = await _discover_auto_import_candidates(settings_data, github_token)
-            metrics["discoveredRepositories"] = len(candidates)
-            min_hot_score = float(settings_data.get("minHotScore") or 0)
-            max_repositories = int(settings_data.get("maxRepositories") or 12)
-            max_templates = int(settings_data.get("maxTemplatesPerRun") or 80)
-            selected = [candidate for candidate in candidates if float(candidate.get("hotScore", 0)) >= min_hot_score][:max_repositories]
-            metrics["selectedRepositories"] = len(selected)
-
-            remaining = max_templates
-            for candidate in selected:
-                if remaining <= 0:
-                    break
-                source: OpenPromptSource = candidate["source"]
-                trusted = _source_is_trusted(candidate, settings_data.get("trustedRepos") or [])
-                approve = bool(settings_data.get("autoApproveTrusted")) and trusted
-                visibility = "public" if approve else "private"
-                submission_status = "approved" if approve else "submitted"
-                items = list(candidate.get("items") or [])[:remaining]
-                if not items:
-                    _upsert_open_prompt_discovery(candidate, "skipped", "没有可导入模板")
-                    continue
-
-                result = _upsert_open_prompt_items(
-                    source,
-                    items,
-                    actor,
-                    visibility=visibility,
-                    submission_status=submission_status,
-                    description_prefix="Auto imported from",
-                )
-                remaining -= len(items)
-                for key in ("created", "updated", "skipped", "submitted", "approved"):
-                    metrics[key] += int(result.get(key, 0))
-                _upsert_open_prompt_discovery(
-                    candidate,
-                    "imported",
-                    f"新增 {result['created']}，更新 {result['updated']}，跳过 {result['skipped']}",
-                    imported_at=now_ms(),
-                )
-                details["repositories"].append(
-                    {
-                        "repoUrl": candidate["repoUrl"],
-                        "label": candidate["label"],
-                        "hotScore": candidate["hotScore"],
-                        "promptCount": candidate["promptCount"],
-                        "trusted": trusted,
-                        **result,
-                    }
-                )
-
-            message = f"发现 {metrics['discoveredRepositories']} 个仓库，选择 {metrics['selectedRepositories']} 个，新增 {metrics['created']} 个模板"
-            status = "done"
-        except Exception as exc:
-            message = str(exc)
-            status = "error"
-            details["error"] = compact_message(exc)
-
-        with get_conn() as conn:
-            insert_audit_log(
-                conn,
-                actor,
-                "template.auto_import",
-                "prompt_template",
-                None,
-                {
-                    "trigger": trigger,
-                    "status": status,
-                    "created": metrics["created"],
-                    "submitted": metrics["submitted"],
-                    "approved": metrics["approved"],
-                    "message": message,
-                },
-            )
-        return _finish_auto_import_run(run_id, status=status, message=message, metrics=metrics, details=details)
 
 
 def _get_template_or_404(template_id: str, user: UserOut) -> PromptTemplateOut:
@@ -2505,26 +1934,31 @@ async def preview_open_library_templates(
             for row in existing_rows
             if str(row["source_url"] or "").strip()
         }
+        all_existing_prompts = {
+            row["prompt"].strip()
+            for row in conn.execute("SELECT prompt FROM prompt_templates").fetchall()
+            if row["prompt"] and row["prompt"].strip()
+        }
+
+        def _is_duplicate(item: dict[str, Any]) -> bool:
+            if _open_prompt_duplicate_marker(item)[0] in existing_urls:
+                return True
+            if _open_prompt_duplicate_marker(item)[1] in existing_title_authors:
+                return True
+            prompt_text = str(item.get("prompt") or "").strip()
+            if prompt_text and prompt_text in all_existing_prompts:
+                return True
+            return False
+
         loaded = len(items)
         total = len(all_items)
-        duplicate_count = sum(
-            1
-            for item in items
-            if (
-                _open_prompt_duplicate_marker(item)[0] in existing_urls
-                or _open_prompt_duplicate_marker(item)[1] in existing_title_authors
-            )
-        )
+        duplicate_count = sum(1 for item in items if _is_duplicate(item))
         new_count = max(0, loaded - duplicate_count)
         high_quality_count = sum(1 for item in items if float(item["qualityScore"]) >= 70)
         high_quality_new_count = sum(
             1
             for item in items
-            if float(item["qualityScore"]) >= 70
-            and not (
-                _open_prompt_duplicate_marker(item)[0] in existing_urls
-                or _open_prompt_duplicate_marker(item)[1] in existing_title_authors
-            )
+            if float(item["qualityScore"]) >= 70 and not _is_duplicate(item)
         )
     return OpenPromptPreviewOut(
         source=prompt_source.id,
@@ -2551,10 +1985,7 @@ async def preview_open_library_templates(
                 category=item["category"],
                 tags=item["tags"],
                 qualityScore=item["qualityScore"],
-                isDuplicate=(
-                    _open_prompt_duplicate_marker(item)[0] in existing_urls
-                    or _open_prompt_duplicate_marker(item)[1] in existing_title_authors
-                ),
+                isDuplicate=_is_duplicate(item),
             )
             for item in items
         ],
@@ -2579,24 +2010,6 @@ async def import_evolink_templates(
     admin: UserOut = Depends(require_template_operator),
 ) -> dict[str, int | bool | str]:
     return await _import_open_prompt_source("evolink", limit, admin)
-
-
-@router.get("/api/admin/open-prompt-discoveries", response_model=list[OpenPromptDiscoveryOut])
-def list_open_prompt_discoveries(
-    limit: int = Query(50, ge=1, le=200),
-    admin: UserOut = Depends(require_admin),
-) -> list[OpenPromptDiscoveryOut]:
-    del admin
-    with get_conn() as conn:
-        rows = conn.execute(
-            """
-            SELECT * FROM open_prompt_discoveries
-            ORDER BY hot_score DESC, last_seen_at DESC
-            LIMIT ?
-            """,
-            (limit,),
-        ).fetchall()
-    return [_row_to_open_prompt_discovery(row) for row in rows]
 
 
 @router.get("/api/admin/open-prompt-sources", response_model=list[OpenPromptSourceOut])
@@ -2635,80 +2048,3 @@ def list_open_prompt_sources(admin: UserOut = Depends(require_template_operator)
     ]
 
 
-@router.get("/api/admin/auto-import/settings", response_model=AutoImportSettingsOut)
-def get_auto_import_settings(admin: UserOut = Depends(require_admin)) -> AutoImportSettingsOut:
-    del admin
-    settings_data, github_token = read_auto_import_settings()
-    return _auto_import_settings_out(settings_data, github_token)
-
-
-@router.patch("/api/admin/auto-import/settings", response_model=AutoImportSettingsOut)
-def patch_auto_import_settings(
-    payload: AutoImportSettingsPatch,
-    admin: UserOut = Depends(require_admin),
-) -> AutoImportSettingsOut:
-    current, current_token = read_auto_import_settings()
-    data = payload.model_dump(exclude_unset=True)
-    next_data = {**current}
-    for key in (
-        "enabled",
-        "runHour",
-        "searchQueries",
-        "trustedRepos",
-        "includeKnownSources",
-        "autoApproveTrusted",
-        "maxRepositories",
-        "maxTemplatesPerRun",
-        "minHotScore",
-    ):
-        if key in data:
-            next_data[key] = data[key]
-    next_data = _sanitize_auto_import_settings(next_data)
-    next_token = current_token if "githubToken" not in data else str(data.get("githubToken") or "").strip()
-    ts = now_ms()
-    with get_conn() as conn:
-        conn.execute(
-            """
-            INSERT INTO auto_import_settings (id, settings_json, github_token, last_run_at, updated_at)
-            VALUES ('default', ?, ?, ?, ?)
-            ON CONFLICT(id) DO UPDATE SET
-              settings_json = excluded.settings_json,
-              github_token = excluded.github_token,
-              updated_at = excluded.updated_at
-            """,
-            (json_dumps(next_data), next_token, current.get("lastRunAt"), ts),
-        )
-        insert_audit_log(
-            conn,
-            admin,
-            "template.auto_import_settings",
-            "auto_import_settings",
-            "default",
-            {
-                "enabled": next_data["enabled"],
-                "runHour": next_data["runHour"],
-                "includeKnownSources": next_data["includeKnownSources"],
-                "autoApproveTrusted": next_data["autoApproveTrusted"],
-                "maxRepositories": next_data["maxRepositories"],
-                "maxTemplatesPerRun": next_data["maxTemplatesPerRun"],
-            },
-        )
-    next_data["lastRunAt"] = current.get("lastRunAt")
-    next_data["updatedAt"] = ts
-    return _auto_import_settings_out(next_data, next_token)
-
-
-@router.post("/api/admin/auto-import/run", response_model=AutoImportRunOut)
-async def run_auto_import_now(admin: UserOut = Depends(require_admin)) -> AutoImportRunOut:
-    return await perform_auto_import("manual", admin)
-
-
-@router.get("/api/admin/auto-import/runs", response_model=list[AutoImportRunOut])
-def list_auto_import_runs(
-    limit: int = Query(20, ge=1, le=100),
-    admin: UserOut = Depends(require_admin),
-) -> list[AutoImportRunOut]:
-    del admin
-    with get_conn() as conn:
-        rows = conn.execute("SELECT * FROM auto_import_runs ORDER BY started_at DESC LIMIT ?", (limit,)).fetchall()
-    return [_row_to_auto_import_run(row) for row in rows]

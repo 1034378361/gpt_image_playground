@@ -21,7 +21,7 @@ from ..assets import (
 )
 from ..config import settings
 from ..db import get_conn
-from ..dependencies import require_user
+from ..dependencies import assert_generation_not_rate_limited, require_user
 from ..generation_runtime import GenerationExecution
 from ..helpers import (
     compact_message,
@@ -1278,6 +1278,7 @@ def get_generation_queue_stats(user: UserOut = Depends(require_user)) -> Generat
 
 @router.post("/api/generations", response_model=GenerationTaskOut)
 def create_generation(payload: GenerationTaskIn, user: UserOut = Depends(require_user)) -> GenerationTaskOut:
+    assert_generation_not_rate_limited(user.id)
     next_payload = payload.model_copy(update={"projectId": resolve_owned_project_id(payload.projectId, user)})
     return insert_generation(next_payload, user.id)
 
@@ -1451,6 +1452,7 @@ async def cancel_generation(task_id: str, user: UserOut = Depends(require_user))
 
 @router.post("/api/generate", response_model=GenerateOut)
 async def generate(payload: GenerateIn, user: UserOut = Depends(require_user)) -> GenerateOut:
+    assert_generation_not_rate_limited(user.id)
     _, selected_model, _, _, codex_cli, _, _ = resolve_generation_target(payload)
     task_id = payload.taskId or new_id()
     payload = payload.model_copy(

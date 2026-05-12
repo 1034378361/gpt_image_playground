@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -13,7 +12,6 @@ from .config import settings
 from .db import init_db
 from .generation_runtime import GenerationRuntime
 from . import state as _state
-from .state import AUTO_IMPORT_WORKER_TASKS
 
 from .routes.admin import router as admin_router
 from .routes.auth import router as auth_router
@@ -23,7 +21,6 @@ from .routes.generations import router as generations_router
 from .routes.projects import router as projects_router
 from .routes.prompts import router as prompts_router
 from .routes.templates import router as templates_router
-from .routes.templates import perform_auto_import, should_run_auto_import_now, read_auto_import_settings, _first_admin_user as first_admin_user
 
 from .routes.generations import (
     prepare_generation_execution,
@@ -41,15 +38,10 @@ async def lifespan(_: FastAPI):
     recover_pending_generation_tasks()
     ensure_generation_workers()
     await enqueue_pending_generation_tasks()
-    ensure_auto_import_worker()
     try:
         yield
     finally:
-        for task in list(AUTO_IMPORT_WORKER_TASKS):
-            task.cancel()
         await GENERATION_RUNTIME.shutdown()
-        if AUTO_IMPORT_WORKER_TASKS:
-            await asyncio.gather(*AUTO_IMPORT_WORKER_TASKS, return_exceptions=True)
 
 
 app = FastAPI(title="GPT Image Playground API", lifespan=lifespan)
@@ -107,54 +99,6 @@ GENERATION_RUNTIME = GenerationRuntime(
     worker_count=settings.generation_worker_count,
 )
 _state.GENERATION_RUNTIME = GENERATION_RUNTIME
-
-
-# ---------------------------------------------------------------------------
-# Auto-import scheduler
-# ---------------------------------------------------------------------------
-
-async def auto_import_scheduler() -> None:
-    while True:
-        try:
-            settings_data, _ = read_auto_import_settings()
-            if should_run_auto_import_now(settings_data):
-                actor = first_admin_user()
-                if actor:
-                    try:
-                        await perform_auto_import("scheduled", actor)
-                    except HTTPException as exc:
-                        if exc.status_code != 409:
-                            raise
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            pass
-        await asyncio.sleep(60)
-
-
-def ensure_auto_import_worker() -> None:
-    try:
-        current_loop = asyncio.get_running_loop()
-    except RuntimeError:
-        return
-
-    live_tasks: set[asyncio.Task[None]] = set()
-    for task in AUTO_IMPORT_WORKER_TASKS:
-        try:
-            task_loop = task.get_loop()
-        except RuntimeError:
-            continue
-        if not task.done() and task_loop is current_loop and not task_loop.is_closed():
-            live_tasks.add(task)
-
-    AUTO_IMPORT_WORKER_TASKS.clear()
-    AUTO_IMPORT_WORKER_TASKS.update(live_tasks)
-    if AUTO_IMPORT_WORKER_TASKS:
-        return
-
-    worker = asyncio.create_task(auto_import_scheduler(), name="auto-import-scheduler")
-    AUTO_IMPORT_WORKER_TASKS.add(worker)
-    worker.add_done_callback(lambda task: AUTO_IMPORT_WORKER_TASKS.discard(task))
 
 
 # ---------------------------------------------------------------------------

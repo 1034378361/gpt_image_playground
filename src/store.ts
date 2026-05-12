@@ -6,9 +6,6 @@ import type {
   ApiChannel,
   ApiChannelDraft,
   AppSettings,
-  AutoImportRun,
-  AutoImportSettings,
-  AutoImportSettingsPatch,
   AuditLog,
   TaskParams,
   GenerationPreflight,
@@ -22,7 +19,6 @@ import type {
   TemplateFilters,
   BackendUser,
   OpenPromptSourceStatus,
-  OpenPromptDiscovery,
   ChannelLeaderboardItem,
   GenerationQueueStats,
 } from './types'
@@ -148,12 +144,6 @@ interface AppState {
   setAuditLogs: (logs: AuditLog[]) => void
   openPromptSources: OpenPromptSourceStatus[]
   setOpenPromptSources: (sources: OpenPromptSourceStatus[]) => void
-  openPromptDiscoveries: OpenPromptDiscovery[]
-  setOpenPromptDiscoveries: (discoveries: OpenPromptDiscovery[]) => void
-  autoImportSettings: AutoImportSettings | null
-  setAutoImportSettings: (settings: AutoImportSettings | null) => void
-  autoImportRuns: AutoImportRun[]
-  setAutoImportRuns: (runs: AutoImportRun[]) => void
   channelLeaderboard: ChannelLeaderboardItem[]
   setChannelLeaderboard: (items: ChannelLeaderboardItem[]) => void
   queueStats: GenerationQueueStats | null
@@ -301,12 +291,6 @@ export const useStore = create<AppState>()(
       setAuditLogs: (auditLogs) => set({ auditLogs }),
       openPromptSources: [],
       setOpenPromptSources: (openPromptSources) => set({ openPromptSources }),
-      openPromptDiscoveries: [],
-      setOpenPromptDiscoveries: (openPromptDiscoveries) => set({ openPromptDiscoveries }),
-      autoImportSettings: null,
-      setAutoImportSettings: (autoImportSettings) => set({ autoImportSettings }),
-      autoImportRuns: [],
-      setAutoImportRuns: (autoImportRuns) => set({ autoImportRuns }),
       channelLeaderboard: [],
       setChannelLeaderboard: (channelLeaderboard) => set({ channelLeaderboard }),
       queueStats: null,

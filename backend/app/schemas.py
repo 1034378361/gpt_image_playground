@@ -446,69 +446,6 @@ class OpenPromptImportIn(BaseModel):
     selectedKeys: list[str] = Field(default_factory=list)
 
 
-class AutoImportSettingsPatch(BaseModel):
-    enabled: bool | None = None
-    runHour: int | None = Field(default=None, ge=0, le=23)
-    githubToken: str | None = None
-    searchQueries: list[str] | None = None
-    trustedRepos: list[str] | None = None
-    includeKnownSources: bool | None = None
-    autoApproveTrusted: bool | None = None
-    maxRepositories: int | None = Field(default=None, ge=1, le=50)
-    maxTemplatesPerRun: int | None = Field(default=None, ge=1, le=300)
-    minHotScore: float | None = Field(default=None, ge=0, le=10000)
-
-
-class AutoImportSettingsOut(BaseModel):
-    enabled: bool = False
-    runHour: int = 3
-    githubTokenPreview: str = ""
-    searchQueries: list[str] = Field(default_factory=list)
-    trustedRepos: list[str] = Field(default_factory=list)
-    includeKnownSources: bool = True
-    autoApproveTrusted: bool = False
-    maxRepositories: int = 12
-    maxTemplatesPerRun: int = 80
-    minHotScore: float = 20
-    lastRunAt: int | None = None
-    nextRunAt: int | None = None
-    updatedAt: int | None = None
-
-
-class AutoImportRunOut(BaseModel):
-    id: str
-    status: Literal["running", "done", "error"]
-    trigger: Literal["manual", "scheduled"]
-    startedAt: int
-    finishedAt: int | None = None
-    discoveredRepositories: int = 0
-    selectedRepositories: int = 0
-    created: int = 0
-    updated: int = 0
-    skipped: int = 0
-    submitted: int = 0
-    approved: int = 0
-    message: str = ""
-    details: dict[str, Any] = Field(default_factory=dict)
-
-
-class OpenPromptDiscoveryOut(BaseModel):
-    id: str
-    sourceId: str
-    label: str
-    repoUrl: str
-    description: str = ""
-    stars: int = 0
-    forks: int = 0
-    hotScore: float = 0
-    promptCount: int = 0
-    licenseName: str = ""
-    lastSeenAt: int
-    lastImportedAt: int | None = None
-    lastStatus: str = ""
-    lastMessage: str = ""
-
-
 class GenerationTaskIn(BaseModel):
     id: str | None = None
     templateId: str | None = None

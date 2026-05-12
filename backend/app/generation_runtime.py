@@ -48,7 +48,7 @@ class GenerationRuntime:
 
     def cancel_active(self, task_id: str) -> None:
         active_task = self.active_tasks.get(task_id)
-        if active_task and not active_task.done():
+        if active_task is not None and not active_task.done():
             active_task.cancel()
 
     def snapshot(self) -> dict[str, int]:

@@ -4,14 +4,10 @@ import type {
   ApiChannel,
   ApiChannelDraft,
   AppSettings,
-  AutoImportRun,
-  AutoImportSettings,
-  AutoImportSettingsPatch,
   AuditLog,
   ChannelLeaderboardItem,
   GenerationPreflight,
   GenerationQueueStats,
-  OpenPromptDiscovery,
   OpenPromptSourceStatus,
   PromptTemplate,
   PromptTemplateDraft,
@@ -63,9 +59,6 @@ function resetSyncedServerState() {
   state.setAdminUsers([])
   state.setAuditLogs([])
   state.setOpenPromptSources([])
-  state.setOpenPromptDiscoveries([])
-  state.setAutoImportSettings(null)
-  state.setAutoImportRuns([])
   state.setChannelLeaderboard([])
   state.setQueueStats(null)
   state.setTemplateSubmissions([])
@@ -662,9 +655,6 @@ export async function syncServerData() {
     setAdminUsers,
     setAuditLogs,
     setOpenPromptSources,
-    setOpenPromptDiscoveries,
-    setAutoImportSettings,
-    setAutoImportRuns,
     setChannelLeaderboard,
     setQueueStats,
     setTemplateSubmissions,
@@ -715,8 +705,7 @@ export async function syncServerData() {
 
     void syncAdminData(settings, systemManager, templateReviewer, {
       setAdminChannels, setAdminUsers, setTemplateSubmissions,
-      setOpenPromptSources, setAuditLogs, setAutoImportSettings,
-      setAutoImportRuns, setOpenPromptDiscoveries,
+      setOpenPromptSources, setAuditLogs,
     })
   } catch (err) {
     showToast(`同步后端数据失败：${err instanceof Error ? err.message : String(err)}`, 'error')
@@ -733,36 +722,27 @@ async function syncAdminData(
     setTemplateSubmissions: (v: PromptTemplate[]) => void
     setOpenPromptSources: (v: OpenPromptSourceStatus[]) => void
     setAuditLogs: (v: AuditLog[]) => void
-    setAutoImportSettings: (v: AutoImportSettings | null) => void
-    setAutoImportRuns: (v: AutoImportRun[]) => void
-    setOpenPromptDiscoveries: (v: OpenPromptDiscovery[]) => void
   },
 ) {
   try {
     const [
       adminChannels, adminUsers, templateSubmissions, openPromptSources,
-      auditLogs, autoImportSettings, autoImportRuns, openPromptDiscoveries,
+      auditLogs,
     ] = await Promise.all([
       systemManager ? backendApi.listAdminChannels(settings) : Promise.resolve([]),
       systemManager ? backendApi.listAdminUsers(settings) : Promise.resolve([]),
       templateReviewer ? backendApi.listTemplateSubmissions(settings) : Promise.resolve([]),
       templateReviewer ? backendApi.listOpenPromptSources(settings) : Promise.resolve([]),
       systemManager ? backendApi.listAuditLogs(settings) : Promise.resolve([]),
-      systemManager ? backendApi.getAutoImportSettings(settings) : Promise.resolve(null),
-      systemManager ? backendApi.listAutoImportRuns(settings) : Promise.resolve([]),
-      systemManager ? backendApi.listOpenPromptDiscoveries(settings) : Promise.resolve([]),
     ]) as [
       AdminApiChannel[], AdminUser[], PromptTemplate[], OpenPromptSourceStatus[],
-      AuditLog[], AutoImportSettings | null, AutoImportRun[], OpenPromptDiscovery[],
+      AuditLog[],
     ]
     setters.setAdminChannels(adminChannels)
     setters.setAdminUsers(adminUsers)
     setters.setTemplateSubmissions(templateSubmissions)
     setters.setOpenPromptSources(openPromptSources)
     setters.setAuditLogs(auditLogs)
-    setters.setAutoImportSettings(autoImportSettings)
-    setters.setAutoImportRuns(autoImportRuns)
-    setters.setOpenPromptDiscoveries(openPromptDiscoveries)
   } catch { /* admin data sync failure is non-critical */ }
 }
 
@@ -844,30 +824,6 @@ export async function importOpenPromptLibrary(
   showToast(
     `${sourceLabel}：已导入 ${result.created} 个精选模板，更新 ${result.updated} 个来源说明，跳过 ${result.skipped} 个重复项`,
     'success',
-  )
-  await syncServerData()
-}
-
-export async function saveAutoImportSettings(payload: AutoImportSettingsPatch) {
-  const { settings, showToast } = useStore.getState()
-  const saved = await backendApi.patchAutoImportSettings(settings, payload)
-  useStore.getState().setAutoImportSettings(saved)
-  showToast('自动导入设置已保存', 'success')
-  await syncServerData()
-}
-
-export async function runAutoImportNow() {
-  const { settings, showToast } = useStore.getState()
-  const run = await backendApi.runAutoImport(settings)
-  useStore
-    .getState()
-    .setAutoImportRuns([run, ...useStore.getState().autoImportRuns.filter((item) => item.id !== run.id)])
-  const tone = run.status === 'error' ? 'error' : 'success'
-  showToast(
-    run.status === 'error'
-      ? `自动导入失败：${run.message || '未知错误'}`
-      : `自动导入完成：新增 ${run.created} 个，待审核 ${run.submitted} 个，自动通过 ${run.approved} 个`,
-    tone,
   )
   await syncServerData()
 }

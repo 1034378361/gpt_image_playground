@@ -14,6 +14,7 @@ from ..assets import (
     delete_asset_files,
     save_asset_bytes,
 )
+from ..config import settings
 from ..db import get_conn
 from ..dependencies import require_user
 from ..schemas import AssetOut, UserOut
@@ -29,7 +30,11 @@ async def upload_asset(
     templateId: str | None = Form(None),
     user: UserOut = Depends(require_user),
 ) -> AssetOut:
+    if file.size and file.size > settings.max_upload_bytes:
+        raise HTTPException(status_code=413, detail="文件过大")
     data = await file.read()
+    if len(data) > settings.max_upload_bytes:
+        raise HTTPException(status_code=413, detail="文件过大")
     mime = file.content_type or "application/octet-stream"
     return save_asset_bytes(user_id=user.id, data=data, mime=mime, asset_type=type, task_id=taskId, template_id=templateId)
 

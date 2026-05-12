@@ -7,7 +7,7 @@ from .db import get_conn
 from .helpers import row_to_user
 from .schemas import UserOut
 from .security import now_ms
-from .state import LOGIN_ATTEMPTS
+from .state import LOGIN_ATTEMPTS, GENERATION_ATTEMPTS
 
 
 def require_user(request: Request) -> UserOut:
@@ -75,3 +75,14 @@ def record_failed_auth(username: str) -> None:
 
 def clear_failed_auth(username: str) -> None:
     LOGIN_ATTEMPTS.pop(username.lower(), None)
+
+
+def assert_generation_not_rate_limited(user_id: str) -> None:
+    window_ms = 60 * 1000
+    now = now_ms()
+    attempts = GENERATION_ATTEMPTS[user_id]
+    while attempts and attempts[0] < now - window_ms:
+        attempts.popleft()
+    if len(attempts) >= settings.generation_rate_limit:
+        raise HTTPException(status_code=429, detail="生成请求过于频繁，请稍后再试")
+    attempts.append(now)

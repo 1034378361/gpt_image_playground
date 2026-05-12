@@ -20,6 +20,7 @@ class Settings:
         self.default_api_base_url = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
         self.request_timeout_seconds = float(os.getenv("GIP_REQUEST_TIMEOUT_SECONDS", "300"))
         self.generation_worker_count = max(1, int(os.getenv("GIP_GENERATION_WORKER_COUNT", "4")))
+        self.generation_rate_limit = max(1, int(os.getenv("GIP_GENERATION_RATE_LIMIT", "20")))
         self.restore_point_retention = max(1, int(os.getenv("GIP_RESTORE_POINT_RETENTION", "10")))
         self.max_upload_bytes = int(os.getenv("GIP_MAX_UPLOAD_BYTES", str(25 * 1024 * 1024)))
         self.thumbnail_max_size = int(os.getenv("GIP_THUMBNAIL_MAX_SIZE", "512"))

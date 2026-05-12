@@ -334,69 +334,6 @@ export interface OpenPromptPreview {
   items: OpenPromptPreviewItem[]
 }
 
-export interface AutoImportSettings {
-  enabled: boolean
-  runHour: number
-  githubTokenPreview: string
-  searchQueries: string[]
-  trustedRepos: string[]
-  includeKnownSources: boolean
-  autoApproveTrusted: boolean
-  maxRepositories: number
-  maxTemplatesPerRun: number
-  minHotScore: number
-  lastRunAt?: number | null
-  nextRunAt?: number | null
-  updatedAt?: number | null
-}
-
-export interface AutoImportSettingsPatch {
-  enabled?: boolean
-  runHour?: number
-  githubToken?: string
-  searchQueries?: string[]
-  trustedRepos?: string[]
-  includeKnownSources?: boolean
-  autoApproveTrusted?: boolean
-  maxRepositories?: number
-  maxTemplatesPerRun?: number
-  minHotScore?: number
-}
-
-export interface AutoImportRun {
-  id: string
-  status: 'running' | 'done' | 'error'
-  trigger: 'manual' | 'scheduled'
-  startedAt: number
-  finishedAt?: number | null
-  discoveredRepositories: number
-  selectedRepositories: number
-  created: number
-  updated: number
-  skipped: number
-  submitted: number
-  approved: number
-  message: string
-  details: Record<string, unknown>
-}
-
-export interface OpenPromptDiscovery {
-  id: string
-  sourceId: string
-  label: string
-  repoUrl: string
-  description: string
-  stars: number
-  forks: number
-  hotScore: number
-  promptCount: number
-  licenseName: string
-  lastSeenAt: number
-  lastImportedAt?: number | null
-  lastStatus: string
-  lastMessage: string
-}
-
 export interface TemplateSample {
   imageId: string
   taskId?: string | null

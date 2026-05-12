@@ -150,6 +150,9 @@ def init_db(conn: sqlite3.Connection | None = None) -> None:
             CREATE INDEX IF NOT EXISTS idx_prompt_templates_user_updated
               ON prompt_templates(user_id, updated_at DESC);
 
+            CREATE INDEX IF NOT EXISTS idx_prompt_templates_user_visibility
+              ON prompt_templates(user_id, visibility);
+
             CREATE TABLE IF NOT EXISTS prompt_template_versions (
               id TEXT PRIMARY KEY,
               template_id TEXT NOT NULL REFERENCES prompt_templates(id) ON DELETE CASCADE,
@@ -233,6 +236,12 @@ def init_db(conn: sqlite3.Connection | None = None) -> None:
 
             CREATE INDEX IF NOT EXISTS idx_generation_tasks_status
               ON generation_tasks(status, created_at ASC);
+
+            CREATE INDEX IF NOT EXISTS idx_generation_tasks_project_id
+              ON generation_tasks(project_id);
+
+            CREATE INDEX IF NOT EXISTS idx_generation_tasks_channel_id
+              ON generation_tasks(channel_id);
 
             CREATE TABLE IF NOT EXISTS audit_logs (
               id TEXT PRIMARY KEY,

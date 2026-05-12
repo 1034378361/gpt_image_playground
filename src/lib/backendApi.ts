@@ -5,15 +5,11 @@ import type {
   ApiChannelDraft,
   AppSettings,
   AuthSettings,
-  AutoImportRun,
-  AutoImportSettings,
-  AutoImportSettingsPatch,
   AuditLog,
   BackendUser,
   ChannelLeaderboardItem,
   GenerationQueueStats,
   InviteCode,
-  OpenPromptDiscovery,
   OpenPromptSourceStatus,
   OpenPromptPreview,
   PromptOptimizeResult,
@@ -333,32 +329,6 @@ export function listTemplateSubmissions(settings: AppSettings): Promise<PromptTe
 
 export function listOpenPromptSources(settings: AppSettings): Promise<OpenPromptSourceStatus[]> {
   return request(settings, '/admin/open-prompt-sources')
-}
-
-export function getAutoImportSettings(settings: AppSettings): Promise<AutoImportSettings> {
-  return request(settings, '/admin/auto-import/settings')
-}
-
-export function patchAutoImportSettings(
-  settings: AppSettings,
-  payload: AutoImportSettingsPatch,
-): Promise<AutoImportSettings> {
-  return request(settings, '/admin/auto-import/settings', {
-    method: 'PATCH',
-    body: JSON.stringify(payload),
-  })
-}
-
-export function runAutoImport(settings: AppSettings): Promise<AutoImportRun> {
-  return request(settings, '/admin/auto-import/run', { method: 'POST' })
-}
-
-export function listAutoImportRuns(settings: AppSettings, limit = 20): Promise<AutoImportRun[]> {
-  return request(settings, `/admin/auto-import/runs?limit=${encodeURIComponent(String(limit))}`)
-}
-
-export function listOpenPromptDiscoveries(settings: AppSettings, limit = 50): Promise<OpenPromptDiscovery[]> {
-  return request(settings, `/admin/open-prompt-discoveries?limit=${encodeURIComponent(String(limit))}`)
 }
 
 export function previewOpenPromptLibraryTemplates(
