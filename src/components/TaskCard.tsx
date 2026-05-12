@@ -236,7 +236,7 @@ export default function TaskCard({
       )}
       <div className="flex flex-col">
         {/* 图片区域 */}
-        <div className="w-full bg-gray-100 dark:bg-black/20 relative flex items-center justify-center overflow-hidden max-h-48 sm:max-h-72" style={{ minHeight: '6rem' }}>
+        <div className="w-full bg-gray-100 dark:bg-black/20 relative flex items-center justify-center overflow-hidden" style={{ minHeight: '6rem' }}>
           {task.status === 'queued' && (
             <div className="flex flex-col items-center gap-2">
               <svg className="w-8 h-8 text-amber-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -305,7 +305,7 @@ export default function TaskCard({
                 src={thumbSrc}
                 data-image-id={task.outputImages[0]}
                 data-template-id={task.templateId}
-                className="w-full h-full object-cover"
+                className="w-full object-contain"
                 loading="lazy"
                 alt=""
               />
