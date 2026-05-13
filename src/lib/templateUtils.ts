@@ -323,7 +323,7 @@ function normalizeVariableType(value: string | undefined, name: string, defaultV
   if (['image', 'file', 'photo'].includes(raw)) return 'image'
   const hint = `${name} ${defaultValue}`.toLowerCase()
   if (/颜色|色值|主色|color|colour|hex/.test(hint)) return 'color'
-  if (/数量|个数|宽度|高度|比例|number|count|width|height|ratio/.test(hint)) return 'number'
+  if (/数量|个数|宽度|高度|比例|number|\bcount\b|width|height|ratio/.test(hint)) return 'number'
   if (/图片|图像|logo|照片|image|photo|picture/.test(hint)) return 'image'
   if (/背景|场景|描述|concept|scene|background|description/.test(hint) || defaultValue.length > 42) return 'textarea'
   return 'text'
