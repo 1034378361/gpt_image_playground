@@ -84,13 +84,17 @@ export async function initStore() {
   useStore.getState().setTasks(tasks)
   useStore.getState().setTemplates(templates)
 
+  await loadBackendSession({ silent: true })
+
+  const currentTasks = useStore.getState().tasks
+  const currentTemplates = useStore.getState().templates
   const referencedIds = new Set<string>()
-  for (const task of tasks) {
+  for (const task of currentTasks) {
     for (const id of task.inputImageIds || []) referencedIds.add(id)
     if (task.maskImageId) referencedIds.add(task.maskImageId)
     for (const id of task.outputImages || []) referencedIds.add(id)
   }
-  for (const id of getTemplateCoverImageIds(templates)) {
+  for (const id of getTemplateCoverImageIds(currentTemplates)) {
     referencedIds.add(id)
   }
 
@@ -108,8 +112,6 @@ export async function initStore() {
     void Promise.all(orphanIds.map((id) => deleteImage(id)))
   }
   void evictOldImages(referencedIds)
-
-  await loadBackendSession({ silent: true })
 }
 
 interface PreparedTaskSubmission {
