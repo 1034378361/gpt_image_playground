@@ -1241,7 +1241,7 @@ def generation_preflight(payload: GenerationPreflightIn, user: UserOut = Depends
 def list_generations(user: UserOut = Depends(require_user)) -> list[GenerationTaskOut]:
     with get_conn() as conn:
         rows = conn.execute(
-            "SELECT * FROM generation_tasks WHERE user_id = ? ORDER BY created_at DESC LIMIT 500",
+            "SELECT * FROM generation_tasks WHERE user_id = ? ORDER BY created_at DESC",
             (user.id,),
         ).fetchall()
     return [row_to_task(row) for row in rows]
