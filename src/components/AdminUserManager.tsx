@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react'
 import { useStore } from '../store'
 import { updateAdminUserRole } from '../storeBackend'
+import { resetUserPassword } from '../lib/backendApi'
 import type { AdminUser } from '../types'
 import { roleLabel } from '../lib/roles'
 import Select from './Select'
@@ -21,6 +22,7 @@ export default function AdminUserManager() {
   const adminUsers = useStore((s) => s.adminUsers)
   const backendUser = useStore((s) => s.backendUser)
   const setConfirmDialog = useStore((s) => s.setConfirmDialog)
+  const showToast = useStore((s) => s.showToast)
   const [savingUserId, setSavingUserId] = useState<string | null>(null)
   const [roleFilter, setRoleFilter] = useState<'all' | AdminUser['role']>('all')
   const adminCount = adminUsers.filter((user) => user.role === 'admin').length
@@ -129,14 +131,38 @@ export default function AdminUserManager() {
                   )}
                 </div>
 
-                <div className="sm:w-40">
-                  <Select
-                    value={user.role}
-                    onChange={(value) => handleRoleChange(user, value as AdminUser['role'])}
-                    disabled={savingUserId === user.id || roleLocked}
-                    options={ROLE_OPTIONS}
-                    className="rounded-xl border border-gray-200/70 bg-white px-3 py-2 text-sm dark:border-white/[0.08] dark:bg-white/[0.04] dark:text-gray-200"
-                  />
+                <div className="flex items-center gap-2 sm:w-auto">
+                  <div className="sm:w-40">
+                    <Select
+                      value={user.role}
+                      onChange={(value) => handleRoleChange(user, value as AdminUser['role'])}
+                      disabled={savingUserId === user.id || roleLocked}
+                      options={ROLE_OPTIONS}
+                      className="rounded-xl border border-gray-200/70 bg-white px-3 py-2 text-sm dark:border-white/[0.08] dark:bg-white/[0.04] dark:text-gray-200"
+                    />
+                  </div>
+                  {!isCurrentAdmin && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setConfirmDialog({
+                          title: '重置密码',
+                          message: `确定要重置用户 ${user.username} 的密码吗？将生成一个临时密码，用户需要用临时密码登录后自行修改。`,
+                          action: async () => {
+                            try {
+                              const result = await resetUserPassword(useStore.getState().settings, user.id)
+                              showToast(`${user.username} 的临时密码：${result.tempPassword}（请复制保存）`, 'success')
+                            } catch (err) {
+                              showToast(err instanceof Error ? err.message : String(err), 'error')
+                            }
+                          },
+                        })
+                      }}
+                      className="rounded-xl border border-gray-200/70 bg-white px-3 py-2 text-xs text-gray-600 hover:bg-gray-100 dark:border-white/[0.08] dark:bg-white/[0.04] dark:text-gray-300 dark:hover:bg-white/[0.08]"
+                    >
+                      重置密码
+                    </button>
+                  )}
                 </div>
               </div>
             )

@@ -228,6 +228,12 @@ export function patchAdminUserRole(
   })
 }
 
+export function resetUserPassword(settings: AppSettings, userId: string): Promise<{ tempPassword: string }> {
+  return request(settings, `/admin/users/${encodeURIComponent(userId)}/reset-password`, {
+    method: 'POST',
+  })
+}
+
 export function getAdminAuthSettings(settings: AppSettings): Promise<AuthSettings> {
   return request(settings, '/admin/auth/settings')
 }

@@ -28,7 +28,7 @@ from ..schemas import (
     UserOut,
     UserRolePatchIn,
 )
-from ..security import create_session_token, new_id, now_ms
+from ..security import create_session_token, hash_password, new_id, now_ms
 from ..helpers import (
     auth_settings_to_out,
     get_auth_settings,
@@ -748,6 +748,35 @@ def update_admin_user_role(
             },
         )
     return row_to_user(row)
+
+
+@router.post("/users/{user_id}/reset-password")
+def reset_user_password(
+    user_id: str,
+    admin: UserOut = Depends(require_admin),
+) -> dict[str, str]:
+    import secrets
+    temp_password = secrets.token_urlsafe(10)
+    with get_conn() as conn:
+        target = conn.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
+        if not target:
+            raise HTTPException(status_code=404, detail="User not found")
+        ts = now_ms()
+        conn.execute(
+            "UPDATE users SET password_hash = ?, updated_at = ? WHERE id = ?",
+            (hash_password(temp_password), ts, user_id),
+        )
+        conn.execute("DELETE FROM sessions WHERE user_id = ?", (user_id,))
+        insert_audit_log(
+            conn,
+            admin,
+            "user.reset_password",
+            "user",
+            user_id,
+            {"username": target["username"]},
+        )
+    return {"tempPassword": temp_password}
+
 
 # --- PLACEHOLDER_ROUTES_2 ---
 
