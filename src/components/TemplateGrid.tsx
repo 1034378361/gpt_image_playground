@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useStore } from '../store'
+import { loadMoreServerTemplates } from '../storeBackend'
 import { filterTemplates, isApprovedPublicTemplate, UNASSIGNED_PROJECT_ID } from '../lib/templateUtils'
 import TemplateCard from './TemplateCard'
 
@@ -10,6 +11,7 @@ export default function TemplateGrid() {
   const templateSubmissions = useStore((s) => s.templateSubmissions)
   const backendUser = useStore((s) => s.backendUser)
   const filters = useStore((s) => s.templateFilters)
+  const templatePage = useStore((s) => s.templatePage)
   const projects = useStore((s) => s.projects)
   const currentProjectId = useStore((s) => s.currentProjectId)
   const setTemplateEditor = useStore((s) => s.setTemplateEditor)
@@ -83,9 +85,24 @@ export default function TemplateGrid() {
     setVisibleCount(PAGE_SIZE)
   }, [filteredTemplates.length, filters])
 
+  const canAutoLoadServerTemplates =
+    filters.scope === 'all'
+    && !currentProjectId
+    && !filters.query.trim()
+    && !filters.favoriteOnly
+    && filters.category === '__all__'
+    && filters.tag === '__all__'
+    && filters.collection === '__all__'
   const loadMore = useCallback(() => {
-    setVisibleCount((prev) => Math.min(prev + PAGE_SIZE, filteredTemplates.length))
-  }, [filteredTemplates.length])
+    if (visibleCount < filteredTemplates.length) {
+      setVisibleCount((prev) => Math.min(prev + PAGE_SIZE, filteredTemplates.length))
+      return
+    }
+    if (canAutoLoadServerTemplates && templatePage.hasMore && !templatePage.loadingMore) {
+      void loadMoreServerTemplates()
+    }
+  }, [canAutoLoadServerTemplates, filteredTemplates.length, templatePage.hasMore, templatePage.loadingMore, visibleCount])
+  const canLoadMoreTemplates = visibleCount < filteredTemplates.length || (canAutoLoadServerTemplates && templatePage.hasMore)
 
   useEffect(() => {
     const sentinel = sentinelRef.current
@@ -191,7 +208,12 @@ export default function TemplateGrid() {
             </div>
           </section>
         ))}
-        {visibleCount < filteredTemplates.length && <div ref={sentinelRef} className="h-10" />}
+        {canLoadMoreTemplates && <div ref={sentinelRef} className="h-10" />}
+        {(filters.scope !== 'review' && (templatePage.total > 0 || templatePage.loadingMore)) && (
+          <div className="text-center text-xs text-gray-400 dark:text-gray-500">
+            {templatePage.loadingMore ? '正在加载更多模板…' : `已加载 ${Math.min(templatePage.loaded, templatePage.total)} / 共 ${templatePage.total} 个模板`}
+          </div>
+        )}
       </div>
     )
   }
@@ -203,7 +225,12 @@ export default function TemplateGrid() {
           <TemplateCard key={template.id} template={template} />
         ))}
       </div>
-      {visibleCount < filteredTemplates.length && <div ref={sentinelRef} className="h-10" />}
+      {canLoadMoreTemplates && <div ref={sentinelRef} className="h-10" />}
+      {(filters.scope !== 'review' && (templatePage.total > 0 || templatePage.loadingMore)) && (
+        <div className="pt-2 text-center text-xs text-gray-400 dark:text-gray-500">
+          {templatePage.loadingMore ? '正在加载更多模板…' : `已加载 ${Math.min(templatePage.loaded, templatePage.total)} / 共 ${templatePage.total} 个模板`}
+        </div>
+      )}
     </div>
   )
 }

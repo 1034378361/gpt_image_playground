@@ -1,5 +1,7 @@
 import { useRef, useEffect, useCallback, useState, useMemo } from 'react'
-import { useStore, addImageFromFile, updateTaskInStore, removeMultipleTasks, removeMultipleTemplates, selectChannelModel, optimizeCurrentPrompt, ensureImageCached } from '../store'
+import { useStore, addImageFromFile, removeMultipleTasks, selectChannelModel, optimizeCurrentPrompt, ensureImageCached } from '../store'
+import { removeMultipleTemplates } from '../storeTemplateActions'
+import { updateTaskInStore } from '../storeTaskMutations'
 import { refreshGenerationPreflight, submitTask } from '../storeBackend'
 import { DEFAULT_PARAMS } from '../types'
 import { createMaskPreviewDataUrl } from '../lib/canvasImage'
@@ -188,7 +190,7 @@ export default function InputBar() {
   const [qualityHintVisible, setQualityHintVisible] = useState(false)
   const [optimizingPrompt, setOptimizingPrompt] = useState(false)
   const [mobileCollapsed, setMobileCollapsed] = useState(true)
-  const [desktopHovered, setDesktopHovered] = useState(false)
+  const [desktopManualOpen, setDesktopManualOpen] = useState(false)
   const [desktopFocused, setDesktopFocused] = useState(false)
   const [desktopDockHeight, setDesktopDockHeight] = useState(0)
   const [showSizePicker, setShowSizePicker] = useState(false)
@@ -206,6 +208,8 @@ export default function InputBar() {
   const dragCounter = useRef(0)
   const isMobile = useIsMobile()
   const hadSelection = useRef(false)
+  const previousHasAnySelection = useRef(false)
+  const suppressDesktopHoverReveal = useRef(false)
   const skipTransition = useRef(false)
   const hasAnySelection = selectedTaskIds.length > 0 || selectedTemplateIds.length > 0
   if (hasAnySelection) {
@@ -215,10 +219,20 @@ export default function InputBar() {
     hadSelection.current = false
     skipTransition.current = true
   }
-  const desktopExpanded = isMobile || isDragging || desktopHovered || desktopFocused || hasAnySelection
+  const desktopExpanded = isMobile || isDragging || desktopManualOpen || desktopFocused || hasAnySelection
   const desktopCollapsedOffset = isMobile
     ? 0
     : Math.max(0, desktopDockHeight)
+
+  useEffect(() => {
+    if (previousHasAnySelection.current && !hasAnySelection) {
+      suppressDesktopHoverReveal.current = true
+      setDesktopManualOpen(false)
+      setDesktopFocused(false)
+      setMobileCollapsed(true)
+    }
+    previousHasAnySelection.current = hasAnySelection
+  }, [hasAnySelection])
 
   useEffect(() => {
     if (skipTransition.current) {
@@ -464,7 +478,7 @@ export default function InputBar() {
     if (!queuedTask) return
     textareaRef.current?.blur()
     setDesktopFocused(false)
-    setDesktopHovered(false)
+    setDesktopManualOpen(false)
     setMobileCollapsed(true)
   }, [handleMissingGenerationConfig, hasGenerationConfig])
 
@@ -593,7 +607,7 @@ export default function InputBar() {
 
   useEffect(() => {
     if (isMobile) {
-      setDesktopHovered(false)
+      setDesktopManualOpen(false)
       setDesktopFocused(false)
       setDesktopDockHeight(0)
       return
@@ -624,8 +638,9 @@ export default function InputBar() {
 
   useEffect(() => {
     if (composerRevealTick === 0) return
+    suppressDesktopHoverReveal.current = false
     setMobileCollapsed(false)
-    setDesktopHovered(true)
+    setDesktopManualOpen(true)
     setDesktopFocused(true)
     window.requestAnimationFrame(() => {
       textareaRef.current?.focus()
@@ -668,6 +683,7 @@ export default function InputBar() {
       const dock = dockStackRef.current
       if (!dock?.contains(document.activeElement)) {
         setDesktopFocused(false)
+        setDesktopManualOpen(false)
       }
     })
   }, [isMobile])
@@ -743,9 +759,18 @@ export default function InputBar() {
           {!isMobile && (
             <button
               type="button"
-              onFocus={() => setDesktopFocused(true)}
-              onMouseEnter={() => setDesktopHovered(true)}
-              onMouseLeave={() => setDesktopHovered(false)}
+              onFocus={() => {
+                suppressDesktopHoverReveal.current = false
+                setDesktopFocused(true)
+              }}
+              onClick={() => {
+                suppressDesktopHoverReveal.current = false
+                setDesktopManualOpen(true)
+              }}
+              onMouseEnter={() => undefined}
+              onMouseLeave={() => {
+                suppressDesktopHoverReveal.current = false
+              }}
               className={`pointer-events-auto absolute bottom-2 left-1/2 z-10 hidden -translate-x-1/2 items-center gap-2 rounded-full border border-white/50 bg-white/88 px-3 py-1.5 text-xs text-gray-600 shadow-lg shadow-black/10 backdrop-blur dark:border-white/[0.08] dark:bg-gray-900/88 dark:text-gray-300 sm:flex transition-all duration-300 ${
                 desktopExpanded ? 'pointer-events-none translate-y-2 opacity-0' : 'translate-y-0 opacity-100'
               }`}
@@ -759,8 +784,12 @@ export default function InputBar() {
           <div
             ref={dockStackRef}
             className={`pointer-events-auto ease-out will-change-transform ${skipTransition.current ? '' : 'transition-transform duration-300'}`}
-            onMouseEnter={() => !isMobile && setDesktopHovered(true)}
-            onMouseLeave={() => !isMobile && setDesktopHovered(false)}
+            onMouseLeave={() => {
+              if (!isMobile) {
+                suppressDesktopHoverReveal.current = false
+                setDesktopManualOpen(false)
+              }
+            }}
             onFocusCapture={() => !isMobile && setDesktopFocused(true)}
             onBlurCapture={handleDesktopBlurCapture}
             style={
@@ -872,6 +901,8 @@ export default function InputBar() {
               </button>
               <button
                 type="button"
+                tabIndex={-1}
+                onMouseDown={(event) => event.preventDefault()}
                 onClick={() => setActiveTemplateId(null)}
                 className="rounded p-1 hover:bg-blue-100 dark:hover:bg-blue-500/20 transition"
                 title="取消模板关联"

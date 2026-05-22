@@ -1,6 +1,7 @@
 import { useEffect, useState, useRef } from 'react'
 import type { TaskRecord } from '../types'
-import { useStore, getCachedImage, ensureImageCached, updateTaskInStore } from '../store'
+import { useStore, getCachedImage, ensureImageCached } from '../store'
+import { updateTaskInStore } from '../storeTaskMutations'
 import { formatImageRatio } from '../lib/size'
 import { ParamValue } from '../lib/paramDisplay'
 import { getTaskFailureSummary, getTaskQueuePosition } from '../lib/taskDiagnostics'

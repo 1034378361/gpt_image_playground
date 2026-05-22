@@ -29,7 +29,7 @@ export default function Header() {
   const backendUser = useStore((s) => s.backendUser)
   const channelLeaderboard = useStore((s) => s.channelLeaderboard)
   const queueStats = useStore((s) => s.queueStats)
-  const tasks = useStore((s) => s.tasks)
+  const tasks = useStore((s) => s.tasks ?? [])
   const { hasUpdate, latestRelease, dismiss } = useVersionCheck()
   const [showHelp, setShowHelp] = useState(false)
   const [showChannelStatus, setShowChannelStatus] = useState(false)

@@ -1,9 +1,5 @@
 import type { BackendUser } from '../types'
 
-export function isAdmin(user: BackendUser | null | undefined): boolean {
-  return user?.role === 'admin'
-}
-
 export function canReviewTemplates(user: BackendUser | null | undefined): boolean {
   return user?.role === 'admin' || user?.role === 'reviewer'
 }

@@ -1,9 +1,13 @@
 import { useEffect, useMemo, useState } from 'react'
 import type { PromptTemplate, TemplateSample, TemplateVersion } from '../types'
-import { applyTemplate, duplicateTemplate, ensureImageCached, getCachedImage, removeTemplate, setTemplateCover, toggleTemplateFavorite, useStore } from '../store'
+import { applyTemplate, useStore } from '../store'
+import { duplicateTemplate, setTemplateCover, toggleTemplateFavorite } from '../storeTemplateActions'
 import { approveTemplate, rejectTemplate, submitTemplateForReview } from '../storeBackend'
 import { listSimilarTemplates, listTemplateSamples, listTemplateVersions, rateTemplate, restoreTemplateVersion } from '../lib/backendApi'
+import { getTemplateCoverFallback, getTemplatePermissions, getTemplateStatusMeta } from '../lib/templateUtils'
 import { useCloseOnEscape } from '../hooks/useCloseOnEscape'
+import { useTemplateActionHelpers } from '../hooks/useTemplateActionHelpers'
+import { useCachedImageMap } from '../hooks/useCachedImageMap'
 
 export default function TemplateDetailModal() {
   const templates = useStore((s) => s.templates)
@@ -56,8 +60,7 @@ export default function TemplateDetailModal() {
     () => [...new Set(samples.map((sample) => sample.imageId))],
     [samples],
   )
-
-  const [imageSrcs, setImageSrcs] = useState<Record<string, string>>({})
+  const imageSrcs = useCachedImageMap([template?.coverImageId, ...outputImageIds, ...sampleImageIds])
 
   useCloseOnEscape(Boolean(template), () => setSelectedTemplateId(null))
 
@@ -84,67 +87,21 @@ export default function TemplateDetailModal() {
     }
   }, [settings, template?.id])
 
-  useEffect(() => {
-    if (!template) {
-      setImageSrcs({})
-      return
-    }
-
-    let cancelled = false
-    const ids = [...new Set([template.coverImageId, ...outputImageIds, ...sampleImageIds].filter((id): id is string => Boolean(id)))]
-    const initial: Record<string, string> = {}
-    for (const id of ids) {
-      const cached = getCachedImage(id)
-      if (cached) initial[id] = cached
-    }
-    setImageSrcs(initial)
-
-    for (const id of ids) {
-      if (initial[id]) continue
-      ensureImageCached(id).then((url) => {
-        if (!cancelled && url) setImageSrcs((prev) => ({ ...prev, [id]: url }))
-      })
-    }
-
-    return () => {
-      cancelled = true
-    }
-  }, [outputImageIds, sampleImageIds, template])
+  const { runTemplateAction, confirmDeleteTemplate } = useTemplateActionHelpers()
 
   if (!template) return null
 
-  const isOwner = backendUser?.id === template.userId
-  const isAdmin = backendUser?.role === 'admin'
-  const canFavorite = Boolean(isOwner || isAdmin)
-  const canManageDirectly = Boolean(isAdmin || (isOwner && template.submissionStatus !== 'submitted' && template.visibility !== 'public' && template.submissionStatus !== 'approved'))
-  const canAdapt = Boolean(template.visibility === 'public' && !isAdmin)
-  const canEdit = canManageDirectly || canAdapt
-  const canDelete = canManageDirectly
-  const canSubmit = Boolean(isOwner && !isAdmin && template.visibility !== 'public' && template.submissionStatus !== 'submitted' && template.submissionStatus !== 'approved')
-  const canReview = Boolean(isAdmin && template.submissionStatus === 'submitted')
-
+  const { canFavorite, canAdapt, canEdit, canDelete, canSubmit, canReview } = getTemplatePermissions(template, backendUser)
+  const statusMeta = getTemplateStatusMeta(template)
   const coverSrc = template.coverImageId
-    ? imageSrcs[template.coverImageId] || template.externalCoverUrl || template.exampleImages[0] || ''
-    : template.externalCoverUrl || template.exampleImages[0] || ''
+    ? imageSrcs[template.coverImageId] || getTemplateCoverFallback(template)
+    : getTemplateCoverFallback(template)
   const exampleImages = [...new Set([coverSrc, ...(template.exampleImages ?? [])].filter(Boolean))]
   const useCount = Math.max(template.usageCount ?? 0, linkedTasks.length)
 
   const handleDelete = () => {
-    setSelectedTemplateId(null)
-    setConfirmDialog({
-      title: '删除模板',
-      message: '确定要删除这个模板吗？历史生成记录不会被删除。',
-      action: () => {
-        void removeTemplate(template.id).catch((err) => {
-          showToast(err instanceof Error ? err.message : String(err), 'error')
-        })
-      },
-    })
-  }
-
-  const runTemplateAction = (action: () => Promise<unknown>) => {
-    void action().catch((err) => {
-      showToast(err instanceof Error ? err.message : String(err), 'error')
+    confirmDeleteTemplate(template.id, {
+      beforeConfirm: () => setSelectedTemplateId(null),
     })
   }
 
@@ -244,21 +201,15 @@ export default function TemplateDetailModal() {
                 </span>
               )}
               <span className={`rounded-full px-2 py-0.5 text-xs ${
-                template.visibility === 'public'
+                statusMeta.kind === 'public'
                   ? 'bg-emerald-50 text-emerald-600 dark:bg-emerald-500/10 dark:text-emerald-300'
-                  : template.submissionStatus === 'submitted'
+                  : statusMeta.kind === 'submitted'
                   ? 'bg-amber-50 text-amber-600 dark:bg-amber-500/10 dark:text-amber-300'
-                  : template.submissionStatus === 'rejected'
+                  : statusMeta.kind === 'rejected'
                   ? 'bg-rose-50 text-rose-600 dark:bg-rose-500/10 dark:text-rose-300'
                   : 'bg-gray-100 text-gray-600 dark:bg-white/[0.06] dark:text-gray-300'
               }`}>
-                {template.visibility === 'public'
-                  ? '公共模板'
-                  : template.submissionStatus === 'submitted'
-                  ? '待审核'
-                  : template.submissionStatus === 'rejected'
-                  ? '已驳回'
-                  : '私有模板'}
+                {statusMeta.longLabel}
               </span>
             </div>
             {template.rejectionReason && (

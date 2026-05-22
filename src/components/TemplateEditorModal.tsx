@@ -2,7 +2,8 @@ import { useEffect, useMemo, useState } from 'react'
 import type { FormEvent } from 'react'
 import type { ApiMode, PromptTemplateDraft, TaskParams, TemplateFormField } from '../types'
 import { DEFAULT_PARAMS } from '../types'
-import { createTemplateFromDraft, createTemplateFromTask, updateTemplateInStore, useStore } from '../store'
+import { useStore } from '../store'
+import { createTemplateFromDraft, createTemplateFromTask, updateTemplateInStore } from '../storeTemplateActions'
 import {
   deriveTemplateTitle,
   extractTemplateVariableDefinitions,

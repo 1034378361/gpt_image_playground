@@ -1,11 +1,11 @@
-import type { PromptTemplate, PromptTemplateDraft, TemplateFilters, TemplateFormField } from '../types'
+import type { BackendUser, PromptTemplate, PromptTemplateDraft, TemplateFilters, TemplateFormField } from '../types'
 
 export const ALL_TEMPLATE_CATEGORIES = '__all__'
 export const ALL_TEMPLATE_TAGS = '__all__'
 export const ALL_TEMPLATE_COLLECTIONS = '__all__'
 export const UNASSIGNED_PROJECT_ID = '__unassigned__'
 
-export const TEMPLATE_COLLECTIONS = [
+const TEMPLATE_COLLECTIONS = [
   { id: 'product-hero', label: '商品主图', terms: ['product', 'e-commerce', 'commerce', '商品', '产品', '电商', '主图', '货架', '包装', 'skincare', 'perfume', 'bottle'] },
   { id: 'poster-cover', label: '海报封面', terms: ['poster', 'ad', 'advertising', 'banner', 'flyer', 'campaign', 'social', '海报', '封面', '广告', '小红书', '社媒'] },
   { id: 'portrait-photo', label: '头像写真', terms: ['portrait', 'headshot', 'photo', 'photography', '肖像', '头像', '写真', '人像', '证件照', 'face'] },
@@ -56,6 +56,63 @@ const TEMPLATE_QUERY_DICTIONARY: Record<string, string[]> = {
   ui: ['界面', '应用', 'interface', 'dashboard'],
   brand: ['品牌', 'logo', '标志'],
   typography: ['字体', '字标', 'wordmark'],
+}
+
+export function getTemplatePermissions(
+  template: Pick<PromptTemplate, 'userId' | 'visibility' | 'submissionStatus'>,
+  backendUser: BackendUser | null | undefined,
+) {
+  const isOwner = backendUser?.id === template.userId
+  const isAdmin = backendUser?.role === 'admin'
+  const canFavorite = Boolean(isOwner || isAdmin)
+  const canManageDirectly = Boolean(
+    isAdmin || (
+      isOwner
+      && template.submissionStatus !== 'submitted'
+      && template.visibility !== 'public'
+      && template.submissionStatus !== 'approved'
+    ),
+  )
+  const canAdapt = Boolean(template.visibility === 'public' && !isAdmin)
+  const canEdit = canManageDirectly || canAdapt
+  const canDelete = canManageDirectly
+  const canSubmit = Boolean(
+    isOwner
+    && !isAdmin
+    && template.visibility !== 'public'
+    && template.submissionStatus !== 'submitted'
+    && template.submissionStatus !== 'approved'
+  )
+  const canReview = Boolean(isAdmin && template.submissionStatus === 'submitted')
+
+  return {
+    isOwner,
+    isAdmin,
+    canFavorite,
+    canManageDirectly,
+    canAdapt,
+    canEdit,
+    canDelete,
+    canSubmit,
+    canReview,
+  }
+}
+
+export function getTemplateStatusMeta(template: Pick<PromptTemplate, 'visibility' | 'submissionStatus'>) {
+  if (template.visibility === 'public') {
+    return { kind: 'public' as const, shortLabel: '公共', longLabel: '公共模板' }
+  }
+  if (template.submissionStatus === 'submitted') {
+    return { kind: 'submitted' as const, shortLabel: '待审核', longLabel: '待审核' }
+  }
+  if (template.submissionStatus === 'rejected') {
+    return { kind: 'rejected' as const, shortLabel: '已驳回', longLabel: '已驳回' }
+  }
+  return { kind: 'private' as const, shortLabel: '私有', longLabel: '私有模板' }
+}
+
+export function getTemplateCoverFallback(template: Pick<PromptTemplate, 'externalCoverUrl' | 'exampleImages'>): string {
+  return template.externalCoverUrl || template.exampleImages[0] || ''
 }
 
 export function normalizeTemplateTags(tags: string[] | string): string[] {
@@ -163,7 +220,7 @@ export function filterTemplates(templates: PromptTemplate[], filters: TemplateFi
     })
 }
 
-export function buildTemplateSearchText(template: PromptTemplate): string {
+function buildTemplateSearchText(template: PromptTemplate): string {
   const raw = buildTemplateRawSearchText(template)
   const semanticTerms = getTemplateSemanticTerms(template)
   return [raw, ...semanticTerms].join(' ').toLowerCase()
@@ -187,7 +244,7 @@ function buildTemplateRawSearchText(template: PromptTemplate): string {
   ].join(' ').toLowerCase()
 }
 
-export function scoreTemplateForQuery(template: PromptTemplate, tokens: string[]): number {
+function scoreTemplateForQuery(template: PromptTemplate, tokens: string[]): number {
   const title = template.title.toLowerCase()
   const tags = template.tags.join(' ').toLowerCase()
   const category = template.category.toLowerCase()
@@ -209,7 +266,7 @@ export function scoreTemplateForQuery(template: PromptTemplate, tokens: string[]
   return score
 }
 
-export function templateMatchesCollection(template: PromptTemplate, collectionId: string): boolean {
+function templateMatchesCollection(template: PromptTemplate, collectionId: string): boolean {
   const collection = TEMPLATE_COLLECTIONS.find((item) => item.id === collectionId)
   if (!collection) return true
   if (template.collections.includes(collectionId)) return true
@@ -253,7 +310,7 @@ export function getTemplateCollectionCounts(templates: PromptTemplate[]): Array<
   })).filter((item) => item.count > 0)
 }
 
-export function expandTemplateQuery(query: string): string[] {
+function expandTemplateQuery(query: string): string[] {
   if (!query) return []
   const tokens = new Set<string>([query])
   for (const part of query.split(/[\s,，、/|]+/).filter(Boolean)) {
@@ -266,6 +323,12 @@ export function expandTemplateQuery(query: string): string[] {
     }
   }
   return [...tokens].filter(Boolean)
+}
+
+export function getTemplateCoverImageIds(templates: PromptTemplate[]): string[] {
+  return templates
+    .map((template) => template.coverImageId)
+    .filter((id): id is string => Boolean(id))
 }
 
 export function getTemplateCategories(templates: PromptTemplate[]): string[] {
@@ -416,7 +479,7 @@ export function extractTemplateVariables(...texts: Array<string | undefined | nu
   return extractTemplateVariableDefinitions(...texts).map((item) => item.name)
 }
 
-export function fillTemplateVariables(text: string, values: Record<string, string>): string {
+function fillTemplateVariables(text: string, values: Record<string, string>): string {
   return text
     .replace(/\{\{\s*([^{}]+?)\s*\}\}/g, (_, name: string) => values[name.trim()]?.trim() ?? '')
     .replace(/\{argument\s+([^{}]+)\}/g, (placeholder: string, attrsText: string) => {

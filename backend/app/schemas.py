@@ -320,6 +320,14 @@ class PromptTemplateOut(PromptTemplateIn):
     updatedAt: int
 
 
+class PromptTemplatePageOut(BaseModel):
+    items: list[PromptTemplateOut]
+    total: int
+    limit: int
+    offset: int
+    hasMore: bool
+
+
 class SetCoverIn(BaseModel):
     imageId: str
 
@@ -457,7 +465,7 @@ class OpenPromptPreviewOut(BaseModel):
 class OpenPromptImportIn(BaseModel):
     source: str = "evolink"
     limit: int = 0
-    selectedKeys: list[str] = Field(default_factory=list)
+    selectedKeys: list[str] | None = None
 
 
 class BatchDeleteIn(BaseModel):
@@ -548,6 +556,14 @@ class GenerationTaskOut(BaseModel):
     channelId: str | None = None
     apiMode: ApiMode | None = None
     model: str | None = None
+
+
+class GenerationTaskPageOut(BaseModel):
+    items: list[GenerationTaskOut]
+    total: int
+    limit: int
+    offset: int
+    hasMore: bool
 
 
 class AssetOut(BaseModel):

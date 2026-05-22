@@ -23,6 +23,7 @@ from .schemas import (
     InviteCodeUseOut,
     ProjectBoardOut,
     PromptTemplateOut,
+    RegistrationMode,
     TaskParams,
     TemplateVersionOut,
     UserOut,
@@ -76,6 +77,28 @@ def api_key_preview(api_key: str | None) -> str:
 
 def row_to_plain_dict(row: Any) -> dict[str, Any]:
     return {key: row[key] for key in row.keys()}
+
+
+def row_has(row: Any, key: str) -> bool:
+    return key in row.keys()
+
+
+def row_optional(row: Any, key: str, default: Any = None) -> Any:
+    return row[key] if row_has(row, key) else default
+
+
+def row_json(row: Any, key: str, fallback: Any) -> Any:
+    return json_loads(row_optional(row, key), fallback)
+
+
+def row_int(row: Any, key: str, default: int = 0) -> int:
+    value = row_optional(row, key)
+    return int(value) if value is not None else default
+
+
+def row_float(row: Any, key: str, default: float = 0) -> float:
+    value = row_optional(row, key)
+    return float(value) if value is not None else default
 
 
 def row_to_user(row: Any) -> UserOut:
@@ -152,15 +175,35 @@ def normalize_codex_cli_mode(value: str | None) -> CodexCliMode:
 
 
 def normalize_channel_health_status(value: str | None) -> ChannelHealthStatus:
-    if value in {"checking", "healthy", "degraded", "error"}:
-        return value
+    if value == "checking":
+        return "checking"
+    if value == "healthy":
+        return "healthy"
+    if value == "degraded":
+        return "degraded"
+    if value == "error":
+        return "error"
     return "unknown"
 
 
 def normalize_channel_compatibility_status(value: str | None) -> ChannelCompatibilityStatus:
-    if value in {"checking", "standard", "codex", "error"}:
-        return value
+    if value == "checking":
+        return "checking"
+    if value == "standard":
+        return "standard"
+    if value == "codex":
+        return "codex"
+    if value == "error":
+        return "error"
     return "unknown"
+
+
+def normalize_registration_mode(value: str | None) -> RegistrationMode:
+    if value == "disabled":
+        return "disabled"
+    if value == "invite_only":
+        return "invite_only"
+    return "open"
 
 
 def effective_codex_cli(row: Any) -> bool:
@@ -176,19 +219,17 @@ def row_to_channel(row: Any) -> ApiChannelOut:
     return ApiChannelOut(
         id=row["id"],
         name=row["name"],
-        models=[ChannelModel.model_validate(item) for item in json_loads(row["models_json"], [])],
+        models=[ChannelModel.model_validate(item) for item in row_json(row, "models_json", [])],
         timeoutSeconds=int(row["timeout_seconds"] or settings.request_timeout_seconds),
         codexCli=effective_codex_cli(row),
-        codexCliMode=normalize_codex_cli_mode(row["codex_cli_mode"] if "codex_cli_mode" in row.keys() else None),
-        healthStatus=normalize_channel_health_status(row["health_status"] if "health_status" in row.keys() else None),
-        healthMessage=row["health_message"] if "health_message" in row.keys() else "",
-        healthCheckedAt=row["health_checked_at"] if "health_checked_at" in row.keys() else None,
-        healthLatencyMs=row["health_latency_ms"] if "health_latency_ms" in row.keys() else None,
-        compatibilityStatus=normalize_channel_compatibility_status(
-            row["compatibility_status"] if "compatibility_status" in row.keys() else None
-        ),
-        compatibilityMessage=row["compatibility_message"] if "compatibility_message" in row.keys() else "",
-        compatibilityCheckedAt=row["compatibility_checked_at"] if "compatibility_checked_at" in row.keys() else None,
+        codexCliMode=normalize_codex_cli_mode(row_optional(row, "codex_cli_mode")),
+        healthStatus=normalize_channel_health_status(row_optional(row, "health_status")),
+        healthMessage=row_optional(row, "health_message", ""),
+        healthCheckedAt=row_optional(row, "health_checked_at"),
+        healthLatencyMs=row_optional(row, "health_latency_ms"),
+        compatibilityStatus=normalize_channel_compatibility_status(row_optional(row, "compatibility_status")),
+        compatibilityMessage=row_optional(row, "compatibility_message", ""),
+        compatibilityCheckedAt=row_optional(row, "compatibility_checked_at"),
         isEnabled=bool(row["is_enabled"]),
         createdAt=row["created_at"],
         updatedAt=row["updated_at"],
@@ -205,54 +246,50 @@ def row_to_admin_channel(row: Any) -> AdminApiChannelOut:
 
 
 def row_to_template(row: Any) -> PromptTemplateOut:
+    rating_count = row_int(row, "rating_count")
     return PromptTemplateOut(
         id=row["id"],
         userId=row["user_id"],
-        projectId=row["project_id"] if "project_id" in row.keys() else None,
+        projectId=row_optional(row, "project_id"),
         title=row["title"],
         description=row["description"],
         prompt=row["prompt"],
         negativePrompt=row["negative_prompt"],
-        tags=json_loads(row["tags_json"], []),
+        tags=row_json(row, "tags_json", []),
         category=row["category"],
-        params=TaskParams.model_validate(json_loads(row["params_json"], {})),
+        params=TaskParams.model_validate(row_json(row, "params_json", {})),
         channelId=row["channel_id"],
         apiMode=row["api_mode"],
         model=row["model"],
         coverImageId=row["cover_image_id"],
-        externalCoverUrl=row["external_cover_url"] if "external_cover_url" in row.keys() else None,
-        exampleImages=json_loads(row["example_images_json"] if "example_images_json" in row.keys() else None, []),
-        recommendedChannelId=(row["recommended_channel_id"] if "recommended_channel_id" in row.keys() else None) or None,
-        recommendedApiMode=(row["recommended_api_mode"] if "recommended_api_mode" in row.keys() else None) or None,
-        recommendedModel=(row["recommended_model"] if "recommended_model" in row.keys() else "") or "",
-        linkedTaskIds=json_loads(row["linked_task_ids_json"], []),
+        externalCoverUrl=row_optional(row, "external_cover_url"),
+        exampleImages=row_json(row, "example_images_json", []),
+        recommendedChannelId=row_optional(row, "recommended_channel_id") or None,
+        recommendedApiMode=row_optional(row, "recommended_api_mode") or None,
+        recommendedModel=row_optional(row, "recommended_model", "") or "",
+        linkedTaskIds=row_json(row, "linked_task_ids_json", []),
         isFavorite=bool(row["is_favorite"]),
-        sourceName=row["source_name"] if "source_name" in row.keys() else "",
-        sourceUrl=row["source_url"] if "source_url" in row.keys() else "",
-        sourceAuthor=row["source_author"] if "source_author" in row.keys() else "",
-        licenseName=row["license_name"] if "license_name" in row.keys() else "",
-        formFields=json_loads(row["form_fields_json"] if "form_fields_json" in row.keys() else None, []),
-        collections=json_loads(row["collections_json"] if "collections_json" in row.keys() else None, []),
-        isFeatured=bool(row["is_featured"] if "is_featured" in row.keys() else 0),
+        sourceName=row_optional(row, "source_name", ""),
+        sourceUrl=row_optional(row, "source_url", ""),
+        sourceAuthor=row_optional(row, "source_author", ""),
+        licenseName=row_optional(row, "license_name", ""),
+        formFields=row_json(row, "form_fields_json", []),
+        collections=row_json(row, "collections_json", []),
+        isFeatured=bool(row_optional(row, "is_featured", 0)),
         visibility=row["visibility"],
         submissionStatus=row["submission_status"],
         submittedAt=row["submitted_at"],
         reviewedAt=row["reviewed_at"],
         reviewedBy=row["reviewed_by"],
         rejectionReason=row["rejection_reason"],
-        favoriteCount=int(row["favorite_count"] if "favorite_count" in row.keys() and row["favorite_count"] is not None else 0),
-        usageCount=int(row["usage_count"] if "usage_count" in row.keys() and row["usage_count"] is not None else 0),
-        successCount=int(row["success_count"] if "success_count" in row.keys() and row["success_count"] is not None else 0),
-        failureCount=int(row["failure_count"] if "failure_count" in row.keys() and row["failure_count"] is not None else 0),
-        ratingCount=int(row["rating_count"] if "rating_count" in row.keys() and row["rating_count"] is not None else 0),
-        averageRating=round(
-            float(row["rating_total"] or 0) / float(row["rating_count"] or 1),
-            2,
-        )
-        if "rating_total" in row.keys() and "rating_count" in row.keys() and row["rating_count"]
-        else 0,
-        lastUsedAt=row["last_used_at"] if "last_used_at" in row.keys() else None,
-        qualityScore=float(row["quality_score"] if "quality_score" in row.keys() and row["quality_score"] is not None else 0),
+        favoriteCount=row_int(row, "favorite_count"),
+        usageCount=row_int(row, "usage_count"),
+        successCount=row_int(row, "success_count"),
+        failureCount=row_int(row, "failure_count"),
+        ratingCount=rating_count,
+        averageRating=round(float(row_optional(row, "rating_total", 0) or 0) / float(rating_count or 1), 2) if rating_count else 0,
+        lastUsedAt=row_optional(row, "last_used_at"),
+        qualityScore=row_float(row, "quality_score"),
         version=row["version"],
         createdAt=row["created_at"],
         updatedAt=row["updated_at"],
@@ -276,26 +313,26 @@ def row_to_task(row: Any) -> GenerationTaskOut:
         userId=row["user_id"],
         templateId=row["template_id"],
         templateVersionId=row["template_version_id"],
-        projectId=row["project_id"] if "project_id" in row.keys() else None,
-        parentTaskId=row["parent_task_id"] if "parent_task_id" in row.keys() else None,
-        experimentId=row["experiment_id"] if "experiment_id" in row.keys() else None,
-        variationLabel=row["variation_label"] if "variation_label" in row.keys() else None,
+        projectId=row_optional(row, "project_id"),
+        parentTaskId=row_optional(row, "parent_task_id"),
+        experimentId=row_optional(row, "experiment_id"),
+        variationLabel=row_optional(row, "variation_label"),
         prompt=row["prompt"],
-        params=TaskParams.model_validate(json_loads(row["params_json"], {})),
-        inputImageIds=json_loads(row["input_image_ids_json"], []),
+        params=TaskParams.model_validate(row_json(row, "params_json", {})),
+        inputImageIds=row_json(row, "input_image_ids_json", []),
         maskTargetImageId=row["mask_target_image_id"],
         maskImageId=row["mask_image_id"],
-        outputImages=json_loads(row["output_image_ids_json"], []),
-        actualParams=json_loads(row["actual_params_json"], None),
-        actualParamsByImage=json_loads(row["actual_params_by_image_json"], None),
-        revisedPromptByImage=json_loads(row["revised_prompt_by_image_json"], None),
+        outputImages=row_json(row, "output_image_ids_json", []),
+        actualParams=row_json(row, "actual_params_json", None),
+        actualParamsByImage=row_json(row, "actual_params_by_image_json", None),
+        revisedPromptByImage=row_json(row, "revised_prompt_by_image_json", None),
         status=row["status"],
         error=row["error"],
         createdAt=row["created_at"],
         finishedAt=row["finished_at"],
         elapsed=row["elapsed"],
         isFavorite=bool(row["is_favorite"]),
-        diagnostics=json_loads(row["diagnostics_json"] if "diagnostics_json" in row.keys() else None, []),
+        diagnostics=row_json(row, "diagnostics_json", []),
         channelId=row["channel_id"],
         apiMode=row["api_mode"],
         model=row["model"],
@@ -359,7 +396,9 @@ def get_auth_settings(conn: Any) -> dict[str, Any]:
 
 
 def auth_settings_to_out(data: dict[str, Any], has_users: bool) -> AuthSettingsOut:
-    registration_mode = str(data.get("registrationMode") or DEFAULT_AUTH_SETTINGS["registrationMode"])
+    registration_mode = normalize_registration_mode(
+        str(data.get("registrationMode") or DEFAULT_AUTH_SETTINGS["registrationMode"])
+    )
     allow_registration = (not has_users) or registration_mode != "disabled"
     invite_required = has_users and registration_mode == "invite_only"
     return AuthSettingsOut(

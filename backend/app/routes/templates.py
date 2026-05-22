@@ -21,11 +21,13 @@ from ..schemas import (
     OpenPromptSourceOut,
     PromptTemplateIn,
     PromptTemplateOut,
+    PromptTemplatePageOut,
     PromptTemplatePatch,
     RateTemplateIn,
     RejectTemplateIn,
     SetCoverIn,
     TaskParams,
+    TemplateFormField,
     TemplatePackImportIn,
     TemplatePackImportOut,
     TemplateSampleOut,
@@ -264,33 +266,42 @@ def _open_prompt_item_key(source: OpenPromptSource, item: dict[str, str | list[s
     return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:18]
 
 
-def _normalize_open_prompt_item(source: OpenPromptSource, item: dict[str, str | list[str]]) -> dict[str, Any]:
+def _normalize_open_prompt_fields(source: OpenPromptSource, item: dict[str, str | list[str]]) -> dict[str, Any]:
     image = str(item.get("image") or "")
     tags = [str(tag) for tag in item.get("tags", [])]
-    example_images = _normalize_example_images([image] if image else [])
-    quality_score = _calculate_template_quality(
-        str(item.get("title") or ""),
-        str(item.get("prompt") or ""),
-        tags,
-        str(item.get("category") or ""),
-        None,
-        image or None,
-        example_images,
-        source.source_name,
-    )
     return {
-        "key": _open_prompt_item_key(source, item),
         "title": str(item.get("title") or "").strip(),
         "prompt": str(item.get("prompt") or "").strip(),
         "image": image,
-        "exampleImages": example_images,
+        "exampleImages": _normalize_example_images([image] if image else []),
         "sourceUrl": str(item.get("sourceUrl") or "").strip(),
         "sourceAuthor": str(item.get("sourceAuthor") or "").strip(),
         "sourceName": source.source_name,
         "licenseName": source.license_name,
         "category": str(item.get("category") or "").strip(),
         "tags": tags,
-        "qualityScore": quality_score,
+    }
+
+
+def _score_open_prompt_item(fields: dict[str, Any], source_name: str) -> float:
+    return _calculate_template_quality(
+        str(fields["title"]),
+        str(fields["prompt"]),
+        [str(tag) for tag in fields["tags"]],
+        str(fields["category"]),
+        None,
+        str(fields["image"]) or None,
+        list(fields["exampleImages"]),
+        source_name,
+    )
+
+
+def _normalize_open_prompt_item(source: OpenPromptSource, item: dict[str, str | list[str]]) -> dict[str, Any]:
+    fields = _normalize_open_prompt_fields(source, item)
+    return {
+        "key": _open_prompt_item_key(source, item),
+        **fields,
+        "qualityScore": _score_open_prompt_item(fields, source.source_name),
     }
 
 
@@ -343,7 +354,85 @@ def _open_prompt_exists(conn: Any, prompt_source: OpenPromptSource, item: dict[s
         ).fetchone()
     return None
 
+def _build_open_prompt_update_params(
+    item: dict[str, Any],
+    prompt_source: OpenPromptSource,
+    *,
+    channel_id: str,
+    model: ChannelModel,
+    example_images: list[str],
+    quality_score: float,
+    ts: int,
+    template_id: str,
+) -> tuple[Any, ...]:
+    return (
+        str(item["image"]),
+        json_dumps(example_images),
+        channel_id,
+        model.apiMode,
+        model.id,
+        item["sourceUrl"],
+        prompt_source.license_name,
+        quality_score,
+        ts,
+        template_id,
+        str(item["image"]),
+        json_dumps(example_images),
+        channel_id,
+        model.apiMode,
+        model.id,
+        item["sourceUrl"],
+        prompt_source.license_name,
+        quality_score,
+    )
 
+
+def _build_open_prompt_insert_params(
+    item: dict[str, Any],
+    prompt_source: OpenPromptSource,
+    actor: UserOut,
+    *,
+    template_id: str,
+    description_prefix: str,
+    channel_id: str,
+    model: ChannelModel,
+    visibility: str,
+    submission_status: str,
+    submitted_at: int | None,
+    reviewed_at: int | None,
+    reviewed_by: str | None,
+    ts: int,
+) -> tuple[Any, ...]:
+    return (
+        template_id,
+        actor.id,
+        item["title"],
+        f"{description_prefix} {prompt_source.label}.",
+        item["prompt"],
+        json_dumps([str(tag) for tag in item["tags"]]),
+        item["category"],
+        TaskParams().model_dump_json(),
+        channel_id,
+        model.apiMode,
+        model.id,
+        str(item["image"]),
+        prompt_source.source_name,
+        item["sourceUrl"],
+        item["sourceAuthor"],
+        prompt_source.license_name,
+        visibility,
+        submission_status,
+        submitted_at,
+        reviewed_at,
+        reviewed_by,
+        ts,
+        ts,
+    )
+
+
+def _apply_open_prompt_post_write_effects(conn: Any, template_id: str, actor: UserOut) -> None:
+    _recalculate_template_quality(conn, template_id)
+    _snapshot_template_version(conn, template_id, actor)
 
 
 def _upsert_open_prompt_items(
@@ -368,9 +457,7 @@ def _upsert_open_prompt_items(
 
     with get_conn() as conn:
         for item in parsed:
-            image = str(item["image"])
             example_images = _normalize_example_images(item["exampleImages"])
-            tags = [str(tag) for tag in item["tags"]]
             quality_score = float(item["qualityScore"])
             exists = _open_prompt_exists(conn, prompt_source, item)
             if exists:
@@ -398,30 +485,19 @@ def _upsert_open_prompt_items(
                         OR COALESCE(quality_score, 0) != ?
                       )
                     """,
-                    (
-                        image,
-                        json_dumps(example_images),
-                        channel_id,
-                        model.apiMode,
-                        model.id,
-                        item["sourceUrl"],
-                        prompt_source.license_name,
-                        quality_score,
-                        ts,
-                        exists["id"],
-                        image,
-                        json_dumps(example_images),
-                        channel_id,
-                        model.apiMode,
-                        model.id,
-                        item["sourceUrl"],
-                        prompt_source.license_name,
-                        quality_score,
+                    _build_open_prompt_update_params(
+                        item,
+                        prompt_source,
+                        channel_id=channel_id,
+                        model=model,
+                        example_images=example_images,
+                        quality_score=quality_score,
+                        ts=ts,
+                        template_id=exists["id"],
                     ),
                 )
                 if cur.rowcount:
-                    _recalculate_template_quality(conn, exists["id"])
-                    _snapshot_template_version(conn, exists["id"], actor)
+                    _apply_open_prompt_post_write_effects(conn, exists["id"], actor)
                     updated += 1
                 else:
                     skipped += 1
@@ -437,30 +513,20 @@ def _upsert_open_prompt_items(
                   visibility, submission_status, submitted_at, reviewed_at, reviewed_by, version, created_at, updated_at
                 ) VALUES (?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, NULL, ?, '[]', 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
                 """,
-                (
-                    template_id,
-                    actor.id,
-                    item["title"],
-                    f"{description_prefix} {prompt_source.label}.",
-                    item["prompt"],
-                    json_dumps(tags),
-                    item["category"],
-                    TaskParams().model_dump_json(),
-                    channel_id,
-                    model.apiMode,
-                    model.id,
-                    image,
-                    prompt_source.source_name,
-                    item["sourceUrl"],
-                    item["sourceAuthor"],
-                    prompt_source.license_name,
-                    visibility,
-                    submission_status,
-                    submitted_at,
-                    reviewed_at,
-                    reviewed_by,
-                    ts,
-                    ts,
+                _build_open_prompt_insert_params(
+                    item,
+                    prompt_source,
+                    actor,
+                    template_id=template_id,
+                    description_prefix=description_prefix,
+                    channel_id=channel_id,
+                    model=model,
+                    visibility=visibility,
+                    submission_status=submission_status,
+                    submitted_at=submitted_at,
+                    reviewed_at=reviewed_at,
+                    reviewed_by=reviewed_by,
+                    ts=ts,
                 ),
             )
             conn.execute(
@@ -475,8 +541,7 @@ def _upsert_open_prompt_items(
                 """,
                 (json_dumps(example_images), channel_id, model.apiMode, model.id, quality_score, template_id),
             )
-            _recalculate_template_quality(conn, template_id)
-            _snapshot_template_version(conn, template_id, actor)
+            _apply_open_prompt_post_write_effects(conn, template_id, actor)
             created += 1
             if submission_status == "submitted":
                 submitted += 1
@@ -621,52 +686,115 @@ def _resolve_similarity_target(
     return query.strip(), None, None
 
 
-def _pack_item_to_template_payload(item: dict[str, Any], fallback_channel_id: str, fallback_model: ChannelModel) -> PromptTemplateIn:
-    params = item.get("params") if isinstance(item.get("params"), dict) else {}
+def _resolve_template_pack_target(
+    item: dict[str, Any],
+    fallback_channel_id: str,
+    fallback_model: ChannelModel,
+) -> tuple[str, str, str]:
     channel_id = item.get("recommendedChannelId") or item.get("channelId") or fallback_channel_id
     api_mode = item.get("recommendedApiMode") or item.get("apiMode") or fallback_model.apiMode
     model_id = item.get("recommendedModel") or item.get("model") or fallback_model.id
     try:
         _validate_template_channel_selection(str(channel_id), str(api_mode), str(model_id))
     except HTTPException:
-        channel_id = fallback_channel_id
-        api_mode = fallback_model.apiMode
-        model_id = fallback_model.id
-    return PromptTemplateIn(
-        title=str(item.get("title") or "导入模板").strip()[:120],
-        description=str(item.get("description") or "").strip()[:1000],
-        prompt=str(item.get("prompt") or "").strip()[:8000],
-        negativePrompt=(str(item.get("negativePrompt")).strip() if item.get("negativePrompt") else None),
-        tags=[str(tag).strip() for tag in item.get("tags", []) if str(tag).strip()][:12],
-        category=str(item.get("category") or "").strip()[:80],
-        params=TaskParams.model_validate(params),
-        channelId=str(channel_id),
-        apiMode=api_mode,
-        model=str(model_id),
-        coverImageId=None,
-        externalCoverUrl=(str(item.get("externalCoverUrl")).strip() if item.get("externalCoverUrl") else None),
-        exampleImages=_normalize_example_images([str(url) for url in item.get("exampleImages", [])]),
-        recommendedChannelId=str(channel_id),
-        recommendedApiMode=api_mode,
-        recommendedModel=str(model_id),
-        linkedTaskIds=[],
-        isFavorite=False,
-        sourceName=str(item.get("sourceName") or "Template Pack").strip()[:160],
-        sourceUrl=str(item.get("sourceUrl") or "").strip()[:500],
-        sourceAuthor=str(item.get("sourceAuthor") or "").strip()[:160],
-        licenseName=str(item.get("licenseName") or "").strip()[:160],
-        formFields=[
-            item if isinstance(item, dict) else {}
-            for item in item.get("formFields", [])[:24]
-            if isinstance(item, dict)
+        return fallback_channel_id, fallback_model.apiMode, fallback_model.id
+    return str(channel_id), str(api_mode), str(model_id)
+
+
+def _normalize_template_pack_item_fields(
+    item: dict[str, Any],
+    fallback_channel_id: str,
+    fallback_model: ChannelModel,
+) -> dict[str, Any]:
+    channel_id, api_mode, model_id = _resolve_template_pack_target(item, fallback_channel_id, fallback_model)
+    return {
+        "title": str(item.get("title") or "导入模板").strip()[:120],
+        "description": str(item.get("description") or "").strip()[:1000],
+        "prompt": str(item.get("prompt") or "").strip()[:8000],
+        "negativePrompt": (str(item.get("negativePrompt")).strip() if item.get("negativePrompt") else None),
+        "tags": [str(tag).strip() for tag in item.get("tags", []) if str(tag).strip()][:12],
+        "category": str(item.get("category") or "").strip()[:80],
+        "params": item.get("params") if isinstance(item.get("params"), dict) else {},
+        "channelId": channel_id,
+        "apiMode": api_mode,
+        "model": model_id,
+        "externalCoverUrl": (str(item.get("externalCoverUrl")).strip() if item.get("externalCoverUrl") else None),
+        "exampleImages": _normalize_example_images([str(url) for url in item.get("exampleImages", [])]),
+        "recommendedChannelId": channel_id,
+        "recommendedApiMode": api_mode,
+        "recommendedModel": model_id,
+        "sourceName": str(item.get("sourceName") or "Template Pack").strip()[:160],
+        "sourceUrl": str(item.get("sourceUrl") or "").strip()[:500],
+        "sourceAuthor": str(item.get("sourceAuthor") or "").strip()[:160],
+        "licenseName": str(item.get("licenseName") or "").strip()[:160],
+        "formFields": [
+            TemplateFormField.model_validate(field)
+            for field in item.get("formFields", [])[:24]
+            if isinstance(field, dict)
         ],
-        collections=[
+        "collections": [
             str(value).strip()
             for value in item.get("collections", [])[:16]
             if str(value).strip()
         ],
-        isFeatured=bool(item.get("isFeatured")),
+        "isFeatured": bool(item.get("isFeatured")),
+    }
+
+
+def _pack_item_to_template_payload(item: dict[str, Any], fallback_channel_id: str, fallback_model: ChannelModel) -> PromptTemplateIn:
+    fields = _normalize_template_pack_item_fields(item, fallback_channel_id, fallback_model)
+    return PromptTemplateIn(
+        title=fields["title"],
+        description=fields["description"],
+        prompt=fields["prompt"],
+        negativePrompt=fields["negativePrompt"],
+        tags=fields["tags"],
+        category=fields["category"],
+        params=TaskParams.model_validate(fields["params"]),
+        channelId=fields["channelId"],
+        apiMode=fields["apiMode"],
+        model=fields["model"],
+        coverImageId=None,
+        externalCoverUrl=fields["externalCoverUrl"],
+        exampleImages=fields["exampleImages"],
+        recommendedChannelId=fields["recommendedChannelId"],
+        recommendedApiMode=fields["recommendedApiMode"],
+        recommendedModel=fields["recommendedModel"],
+        linkedTaskIds=[],
+        isFavorite=False,
+        sourceName=fields["sourceName"],
+        sourceUrl=fields["sourceUrl"],
+        sourceAuthor=fields["sourceAuthor"],
+        licenseName=fields["licenseName"],
+        formFields=fields["formFields"],
+        collections=fields["collections"],
+        isFeatured=fields["isFeatured"],
     )
+
+
+def _filter_selected_open_prompt_items(
+    parsed: list[dict[str, Any]],
+    selected_keys: list[str] | None,
+) -> tuple[list[dict[str, Any]], bool]:
+    has_explicit_selection = selected_keys is not None
+    if not has_explicit_selection:
+        return parsed, False
+    selected = set(selected_keys)
+    return [item for item in parsed if item["key"] in selected], True
+
+
+def _build_open_prompt_import_audit_payload(
+    result: dict[str, int],
+    prompt_source: OpenPromptSource,
+) -> dict[str, Any]:
+    return {
+        "created": result["created"],
+        "updated": result["updated"],
+        "skipped": result["skipped"],
+        "sourceId": prompt_source.id,
+        "source": prompt_source.repo_url,
+        "license": prompt_source.license_name,
+    }
 
 
 async def _import_open_prompt_source(
@@ -678,10 +806,8 @@ async def _import_open_prompt_source(
     prompt_source = OPEN_PROMPT_SOURCES.get(source_id)
     if not prompt_source:
         raise HTTPException(status_code=404, detail="Open prompt source not found")
-    parsed = await _fetch_open_prompt_items(prompt_source, 0 if selected_keys else limit)
-    selected = set(selected_keys or [])
-    if selected:
-        parsed = [item for item in parsed if item["key"] in selected]
+    parsed = await _fetch_open_prompt_items(prompt_source, 0 if selected_keys is not None else limit)
+    parsed, _ = _filter_selected_open_prompt_items(parsed, selected_keys)
     result = _upsert_open_prompt_items(
         prompt_source,
         parsed,
@@ -697,14 +823,7 @@ async def _import_open_prompt_source(
             "template.import_open_library",
             "prompt_template",
             None,
-            {
-                "created": result["created"],
-                "updated": result["updated"],
-                "skipped": result["skipped"],
-                "sourceId": prompt_source.id,
-                "source": prompt_source.repo_url,
-                "license": prompt_source.license_name,
-            },
+            _build_open_prompt_import_audit_payload(result, prompt_source),
         )
     return {
         "ok": True,
@@ -720,38 +839,91 @@ async def _import_open_prompt_source(
 # ---------------------------------------------------------------------------
 
 
-@router.get("/api/templates", response_model=list[PromptTemplateOut])
-def list_templates(scope: str = Query("all"), user: UserOut = Depends(require_user)) -> list[PromptTemplateOut]:
+@router.get("/api/templates", response_model=PromptTemplatePageOut)
+def list_templates(
+    scope: str = Query("all"),
+    limit: int = Query(80, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    user: UserOut = Depends(require_user),
+) -> PromptTemplatePageOut:
     with get_conn() as conn:
         if scope == "mine":
+            total = int(
+                conn.execute(
+                    "SELECT COUNT(*) FROM prompt_templates WHERE user_id = ?",
+                    (user.id,),
+                ).fetchone()[0]
+            )
             rows = conn.execute(
-                "SELECT * FROM prompt_templates WHERE user_id = ? ORDER BY updated_at DESC",
-                (user.id,),
+                """
+                SELECT * FROM prompt_templates
+                WHERE user_id = ?
+                ORDER BY updated_at DESC
+                LIMIT ? OFFSET ?
+                """,
+                (user.id, limit, offset),
             ).fetchall()
         elif scope == "public":
+            total = int(
+                conn.execute(
+                    """
+                    SELECT COUNT(*) FROM prompt_templates
+                    WHERE visibility = 'public' AND submission_status = 'approved'
+                    """,
+                ).fetchone()[0]
+            )
             rows = conn.execute(
                 """
                 SELECT * FROM prompt_templates
                 WHERE visibility = 'public' AND submission_status = 'approved'
                 ORDER BY updated_at DESC
+                LIMIT ? OFFSET ?
                 """,
+                (limit, offset),
             ).fetchall()
         elif scope == "submissions":
             if user.role != "admin":
                 raise HTTPException(status_code=403, detail="Admin privileges required")
+            total = int(
+                conn.execute(
+                    "SELECT COUNT(*) FROM prompt_templates WHERE submission_status = 'submitted'",
+                ).fetchone()[0]
+            )
             rows = conn.execute(
-                "SELECT * FROM prompt_templates WHERE submission_status = 'submitted' ORDER BY submitted_at DESC, updated_at DESC",
+                """
+                SELECT * FROM prompt_templates
+                WHERE submission_status = 'submitted'
+                ORDER BY submitted_at DESC, updated_at DESC
+                LIMIT ? OFFSET ?
+                """,
+                (limit, offset),
             ).fetchall()
         else:
+            total = int(
+                conn.execute(
+                    """
+                    SELECT COUNT(*) FROM prompt_templates
+                    WHERE user_id = ? OR (visibility = 'public' AND submission_status = 'approved')
+                    """,
+                    (user.id,),
+                ).fetchone()[0]
+            )
             rows = conn.execute(
                 """
                 SELECT * FROM prompt_templates
                 WHERE user_id = ? OR (visibility = 'public' AND submission_status = 'approved')
                 ORDER BY updated_at DESC
+                LIMIT ? OFFSET ?
                 """,
-                (user.id,),
+                (user.id, limit, offset),
             ).fetchall()
-    return [row_to_template(row) for row in rows]
+    return PromptTemplatePageOut(
+        items=[row_to_template(row) for row in rows],
+        total=total,
+        limit=limit,
+        offset=offset,
+        hasMore=offset + len(rows) < total,
+    )
 
 
 @router.post("/api/templates", response_model=PromptTemplateOut)

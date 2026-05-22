@@ -26,7 +26,6 @@ import { DEFAULT_SETTINGS, DEFAULT_PARAMS } from './types'
 import {
   getAllTasks,
   getAllTemplates,
-  putTask,
   putTemplate,
   deleteTask as dbDeleteTask,
   clearTasks as dbClearTasks,
@@ -46,12 +45,13 @@ import {
   composeTemplatePrompt,
   extractTemplateVariables,
   formFieldsToVariableDefinitions,
+  getTemplateCoverImageIds,
   isApprovedPublicTemplate,
   normalizeSelectedProjectId,
   normalizeTemplateDraft,
 } from './lib/templateUtils'
 import * as backendApi from './lib/backendApi'
-import { canManageSystem } from './lib/roles'
+import { updateTaskInStore } from './storeTaskMutations'
 
 // ===== Image cache =====
 // 内存 LRU 缓存，id → dataUrl，避免每次从 IndexedDB 读取
@@ -124,6 +124,27 @@ export async function ensureImageCached(id: string): Promise<string | undefined>
 
 // ===== Store 类型 =====
 
+interface PageState {
+  total: number
+  loaded: number
+  hasMore: boolean
+  loadingMore: boolean
+}
+
+const EMPTY_PAGE: PageState = { total: 0, loaded: 0, hasMore: false, loadingMore: false }
+
+function mergeById<T extends { id: string }>(existing: T[], incoming: T[]): T[] {
+  const base = Array.isArray(existing) ? existing : []
+  const merged = [...base]
+  const seen = new Set(base.map((item) => item.id))
+  for (const item of Array.isArray(incoming) ? incoming : []) {
+    if (seen.has(item.id)) continue
+    seen.add(item.id)
+    merged.push(item)
+  }
+  return merged
+}
+
 interface AppState {
   // 设置
   settings: AppSettings
@@ -190,6 +211,9 @@ interface AppState {
   setCurrentView: (view: AppState['currentView']) => void
   templates: PromptTemplate[]
   setTemplates: (templates: PromptTemplate[]) => void
+  appendTemplates: (templates: PromptTemplate[]) => void
+  templatePage: PageState
+  setTemplatePage: (page: Partial<PageState>) => void
   templateFilters: TemplateFilters
   setTemplateFilters: (filters: Partial<TemplateFilters>) => void
   selectedTemplateId: string | null
@@ -212,6 +236,9 @@ interface AppState {
   // 任务列表
   tasks: TaskRecord[]
   setTasks: (t: TaskRecord[]) => void
+  appendTasks: (tasks: TaskRecord[]) => void
+  taskPage: PageState
+  setTaskPage: (page: Partial<PageState>) => void
 
   // 搜索和筛选
   searchQuery: string
@@ -367,7 +394,10 @@ export const useStore = create<AppState>()(
       currentView: 'tasks',
       setCurrentView: (currentView) => set({ currentView }),
       templates: [],
-      setTemplates: (templates) => set({ templates }),
+      setTemplates: (templates) => set({ templates: Array.isArray(templates) ? templates : [] }),
+      appendTemplates: (templates) => set((s) => ({ templates: mergeById(s.templates, templates) })),
+      templatePage: { ...EMPTY_PAGE },
+      setTemplatePage: (page) => set((s) => ({ templatePage: { ...s.templatePage, ...page } })),
       templateFilters: {
         query: '',
         category: '__all__',
@@ -396,7 +426,10 @@ export const useStore = create<AppState>()(
 
       // Tasks
       tasks: [],
-      setTasks: (tasks) => set({ tasks }),
+      setTasks: (tasks) => set({ tasks: Array.isArray(tasks) ? tasks : [] }),
+      appendTasks: (tasks) => set((s) => ({ tasks: mergeById(s.tasks, tasks) })),
+      taskPage: { ...EMPTY_PAGE },
+      setTaskPage: (page) => set((s) => ({ taskPage: { ...s.taskPage, ...page } })),
 
       // Search & Filter
       searchQuery: '',
@@ -467,14 +500,8 @@ export const useStore = create<AppState>()(
 // ===== Actions =====
 
 let uid = 0
-export function genId(): string {
+function genId(): string {
   return Date.now().toString(36) + (++uid).toString(36) + Math.random().toString(36).slice(2, 6)
-}
-
-export function getTemplateCoverImageIds(templates = useStore.getState().templates): string[] {
-  return templates
-    .map((template) => template.coverImageId)
-    .filter((id): id is string => Boolean(id))
 }
 
 function pickEnabledModel(channel: ApiChannel | undefined, preferredModelId?: string | null) {
@@ -482,34 +509,6 @@ function pickEnabledModel(channel: ApiChannel | undefined, preferredModelId?: st
   const enabledModels = channel.models.filter((model) => model.enabled)
   if (!enabledModels.length) return null
   return enabledModels.find((model) => model.id === preferredModelId) ?? enabledModels[0]
-}
-
-export function syncChannelSelection(channels = useStore.getState().channels) {
-  const state = useStore.getState()
-  const currentChannel = channels.find((channel) => channel.id === state.settings.channelId)
-  const fallbackChannel =
-    (currentChannel && pickEnabledModel(currentChannel, state.settings.model) ? currentChannel : null) ??
-    channels.find((channel) => pickEnabledModel(channel))
-
-  if (!fallbackChannel) {
-    state.setSettings({
-      channelId: '',
-      model: '',
-      apiMode: DEFAULT_SETTINGS.apiMode,
-      codexCli: false,
-    })
-    return
-  }
-
-  const selectedModel = pickEnabledModel(fallbackChannel, state.settings.model)
-  if (!selectedModel) return
-
-  state.setSettings({
-    channelId: fallbackChannel.id,
-    model: selectedModel.id,
-    apiMode: selectedModel.apiMode,
-    codexCli: fallbackChannel.codexCli,
-  })
 }
 
 export function selectChannelModel(channelId: string, modelId?: string | null) {
@@ -529,7 +528,7 @@ export function isServerStorageReady(): boolean {
   return Boolean(useStore.getState().backendUser)
 }
 
-export function assertServerStorageReady() {
+function assertServerStorageReady() {
   if (!useStore.getState().backendUser) {
     throw new Error('请先登录后端账户')
   }
@@ -539,7 +538,7 @@ export function getCodexCliPromptKey(settings: AppSettings): string {
   return `${settings.channelId}\n${settings.model}\n${settings.codexCli ? '1' : '0'}`
 }
 
-export function isActiveTaskStatus(status: TaskStatus): boolean {
+function isActiveTaskStatus(status: TaskStatus): boolean {
   return status === 'queued' || status === 'running'
 }
 
@@ -562,113 +561,7 @@ export function showCodexCliPrompt(force = false, reason = '接口返回的提�
   })
 }
 
-export function updateTaskInStore(taskId: string, patch: Partial<TaskRecord>) {
-  const { tasks, setTasks } = useStore.getState()
-  const updated = tasks.map((t) =>
-    t.id === taskId ? { ...t, ...patch } : t,
-  )
-  setTasks(updated)
-  const task = updated.find((t) => t.id === taskId)
-  if (task) putTask(task)
-}
-
 // ===== Prompt template actions =====
-
-export async function createTemplateFromDraft(draft: PromptTemplateDraft): Promise<PromptTemplate> {
-  const normalized = normalizeTemplateDraft(draft)
-  assertServerStorageReady()
-  const template = await backendApi.createTemplate(useStore.getState().settings, normalized)
-  useStore.getState().setTemplates([template, ...useStore.getState().templates])
-  return template
-}
-
-export async function updateTemplateInStore(
-  templateId: string,
-  patch: Partial<Omit<PromptTemplate, 'id' | 'createdAt'>>,
-  options: { bumpVersion?: boolean } = {},
-): Promise<PromptTemplate | null> {
-  const { templates, setTemplates } = useStore.getState()
-  const existing = templates.find((template) => template.id === templateId)
-  if (!existing) return null
-  assertServerStorageReady()
-  const normalizedPatch = patch.tags || patch.title || patch.description || patch.prompt || patch.model || patch.category || patch.projectId !== undefined
-    ? normalizeTemplateDraft({ ...existing, ...patch, tags: patch.tags ?? existing.tags })
-    : null
-  const serverPatch = normalizedPatch
-    ? { ...patch, ...normalizedPatch }
-    : patch
-  const updated = await backendApi.patchTemplate(useStore.getState().settings, templateId, serverPatch)
-  setTemplates(templates.map((template) => (template.id === templateId ? updated : template)))
-  return updated
-}
-
-export async function removeTemplate(templateId: string) {
-  const { templates, setTemplates, templateSubmissions, setTemplateSubmissions, selectedTemplateId, activeTemplateId, showToast } = useStore.getState()
-  assertServerStorageReady()
-  setTemplates(templates.filter((template) => template.id !== templateId))
-  setTemplateSubmissions(templateSubmissions.filter((template) => template.id !== templateId))
-  await backendApi.deleteTemplate(useStore.getState().settings, templateId)
-  if (selectedTemplateId === templateId) useStore.getState().setSelectedTemplateId(null)
-  if (activeTemplateId === templateId) useStore.getState().setActiveTemplateId(null)
-  showToast('模板已删除', 'success')
-}
-
-export async function removeMultipleTemplates(templateIds: string[]) {
-  if (!templateIds.length) return
-  const { templates, setTemplates, templateSubmissions, setTemplateSubmissions, selectedTemplateId, activeTemplateId, showToast } = useStore.getState()
-  assertServerStorageReady()
-  const toDelete = new Set(templateIds)
-  setTemplates(templates.filter((t) => !toDelete.has(t.id)))
-  setTemplateSubmissions(templateSubmissions.filter((t) => !toDelete.has(t.id)))
-  await backendApi.batchDeleteTemplates(useStore.getState().settings, templateIds)
-  if (selectedTemplateId && toDelete.has(selectedTemplateId)) useStore.getState().setSelectedTemplateId(null)
-  if (activeTemplateId && toDelete.has(activeTemplateId)) useStore.getState().setActiveTemplateId(null)
-  showToast(`已删除 ${templateIds.length} 个模板`, 'success')
-}
-
-export async function duplicateTemplate(templateId: string): Promise<PromptTemplate | null> {
-  const state = useStore.getState()
-  const template = state.templates.find((item) => item.id === templateId)
-  if (!template) return null
-  assertServerStorageReady()
-  const targetProjectId = normalizeSelectedProjectId(state.currentProjectId) ?? normalizeSelectedProjectId(template.projectId)
-  const copy = await createTemplateFromDraft({
-    title: `${template.title} 副本`,
-    description: template.description,
-    prompt: template.prompt,
-    negativePrompt: template.negativePrompt,
-    tags: template.tags,
-    category: template.category,
-    params: template.params,
-    channelId: template.channelId,
-    apiMode: template.apiMode,
-    model: template.model,
-    coverImageId: template.coverImageId,
-    externalCoverUrl: template.externalCoverUrl,
-    exampleImages: template.exampleImages,
-    recommendedChannelId: template.recommendedChannelId,
-    recommendedApiMode: template.recommendedApiMode,
-    recommendedModel: template.recommendedModel,
-    linkedTaskIds: [],
-    isFavorite: false,
-    sourceName: template.sourceName,
-    sourceUrl: template.sourceUrl,
-    sourceAuthor: template.sourceAuthor,
-    licenseName: template.licenseName,
-    projectId: targetProjectId,
-    formFields: template.formFields,
-    collections: template.collections,
-    isFeatured: false,
-  })
-  useStore.getState().showToast(targetProjectId ? '模板已复制到当前项目' : '模板已复制', 'success')
-  return copy
-}
-
-export async function toggleTemplateFavorite(templateId: string) {
-  const template = useStore.getState().templates.find((item) => item.id === templateId)
-  if (!template) return
-  await updateTemplateInStore(templateId, { isFavorite: !template.isFavorite })
-}
 
 export function applyTemplate(template: PromptTemplate) {
   const variables = template.formFields.length
@@ -712,45 +605,13 @@ export function applyTemplateWithVariables(template: PromptTemplate, values: Rec
   showToast('已套用模板到输入区', 'success')
 }
 
-export async function linkTaskToTemplate(templateId: string, taskId: string) {
-  const template = useStore.getState().templates.find((item) => item.id === templateId)
-  if (!template) return
-  if (template.linkedTaskIds.includes(taskId)) return
-  await updateTemplateInStore(templateId, { linkedTaskIds: [taskId, ...template.linkedTaskIds] })
-}
-
-export async function setTemplateCover(templateId: string, imageId: string) {
-  assertServerStorageReady()
-  const updated = await backendApi.setTemplateCover(useStore.getState().settings, templateId, imageId)
-    .then((template) => {
-      useStore.getState().setTemplates(
-        useStore.getState().templates.map((item) => (item.id === templateId ? template : item)),
-      )
-      return template
-    })
-  if (updated) {
-    useStore.getState().showToast('已设为模板封面', 'success')
-  }
-}
-
-export async function createTemplateFromTask(task: TaskRecord, draft: PromptTemplateDraft): Promise<PromptTemplate> {
-  const template = await createTemplateFromDraft({
-    ...draft,
-    linkedTaskIds: [...new Set([task.id, ...(draft.linkedTaskIds ?? [])])],
-  })
-  updateTaskInStore(task.id, {
-    templateId: template.id,
-    templateVersionId: String(template.version),
-  })
-  return template
-}
-
 /** 复用配置 */
 export async function reuseConfig(task: TaskRecord) {
-  const { setPrompt, setParams, setInputImages, setMaskDraft, clearMaskDraft, setActiveTemplateId, showToast } = useStore.getState()
+  const { setPrompt, setParams, setInputImages, setMaskDraft, clearMaskDraft, setActiveTemplateId, requestComposerReveal, showToast } = useStore.getState()
   setPrompt(task.prompt)
   setParams(task.params)
   setActiveTemplateId(task.templateId ?? null)
+  requestComposerReveal()
 
   // 恢复输入图片
   const imgs: InputImage[] = []
@@ -818,6 +679,10 @@ export async function removeMultipleTasks(taskIds: string[]) {
   }
 
   setTasks(remaining)
+  useStore.getState().setTaskPage({
+    total: Math.max(0, useStore.getState().taskPage.total - toDelete.size),
+    loaded: remaining.length,
+  })
   if (isServerStorageReady()) {
     await backendApi.batchDeleteGenerations(useStore.getState().settings, taskIds).catch(() => undefined)
   } else {
@@ -833,7 +698,7 @@ export async function removeMultipleTasks(taskIds: string[]) {
     for (const id of t.outputImages || []) stillUsed.add(id)
   }
   for (const img of inputImages) stillUsed.add(img.id)
-  for (const imgId of getTemplateCoverImageIds()) stillUsed.add(imgId)
+  for (const imgId of getTemplateCoverImageIds(useStore.getState().templates)) stillUsed.add(imgId)
 
   for (const imgId of deletedImageIds) {
     if (!stillUsed.has(imgId)) {
@@ -864,6 +729,10 @@ export async function removeTask(task: TaskRecord) {
   // 从列表移除
   const remaining = tasks.filter((t) => t.id !== task.id)
   setTasks(remaining)
+  useStore.getState().setTaskPage({
+    total: Math.max(0, useStore.getState().taskPage.total - 1),
+    loaded: remaining.length,
+  })
   if (isServerStorageReady()) {
     await backendApi.deleteGeneration(useStore.getState().settings, task.id).catch(() => undefined)
   } else {
@@ -878,7 +747,7 @@ export async function removeTask(task: TaskRecord) {
     for (const id of t.outputImages || []) stillUsed.add(id)
   }
   for (const img of inputImages) stillUsed.add(img.id)
-  for (const imgId of getTemplateCoverImageIds()) stillUsed.add(imgId)
+  for (const imgId of getTemplateCoverImageIds(useStore.getState().templates)) stillUsed.add(imgId)
 
   // 删除孤立图片
   for (const imgId of taskImageIds) {
@@ -897,9 +766,11 @@ export async function clearAllData() {
   await dbClearTemplates()
   await clearImages()
   imageCache.clear()
-  const { setTasks, setTemplates, clearInputImages, clearMaskDraft, setSettings, setParams, showToast } = useStore.getState()
+  const { setTasks, setTemplates, setTaskPage, setTemplatePage, clearInputImages, clearMaskDraft, setSettings, setParams, showToast } = useStore.getState()
   setTasks([])
   setTemplates([])
+  setTaskPage({ ...EMPTY_PAGE })
+  setTemplatePage({ ...EMPTY_PAGE })
   clearInputImages()
   useStore.setState({ dismissedCodexCliPrompts: [] })
   useStore.getState().setActiveTemplateId(null)
@@ -913,59 +784,6 @@ export async function clearAllData() {
 }
 
 /** 导出数据为 ZIP */
-export async function exportData() {
-  try {
-    const { settings, backendUser } = useStore.getState()
-    if (!canManageSystem(backendUser)) {
-      throw new Error('只有管理员可以导出服务端备份')
-    }
-    const blob = await backendApi.exportSystemBackup(settings)
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = `gpt-image-playground-backup-${Date.now()}.zip`
-    a.click()
-    URL.revokeObjectURL(url)
-    useStore.getState().showToast('服务端备份已导出', 'success')
-  } catch (e) {
-    useStore
-      .getState()
-      .showToast(
-        `导出失败：${e instanceof Error ? e.message : String(e)}`,
-        'error',
-      )
-  }
-}
-
-/** 导入 ZIP 数据 */
-export async function importData(file: File) {
-  try {
-    const { settings, backendUser } = useStore.getState()
-    if (!canManageSystem(backendUser)) {
-      throw new Error('只有管理员可以导入服务端备份')
-    }
-    const result = await backendApi.importSystemBackup(settings, file)
-    imageCache.clear()
-    await clearImages()
-    await backendApi.getMe(settings).then((user) => useStore.getState().setBackendUser(user))
-    const { syncServerData } = await import('./storeBackend')
-    await syncServerData()
-    useStore.getState().showToast(
-      result.restorePointName
-        ? `服务端备份已导入，已自动创建恢复点 ${result.restorePointName}`
-        : '服务端备份已导入并重新同步',
-      'success',
-    )
-  } catch (e) {
-    useStore
-      .getState()
-      .showToast(
-        `导入失败：${e instanceof Error ? e.message : String(e)}`,
-        'error',
-      )
-  }
-}
-
 export async function exportTemplatePack(templates?: PromptTemplate[]) {
   try {
     const source = templates ?? useStore.getState().templates

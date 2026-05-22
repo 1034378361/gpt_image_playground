@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import asyncio
 from collections import defaultdict
-from typing import Any
+from typing import Any, Literal
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 from pydantic import ValidationError
 
@@ -55,6 +55,7 @@ from ..schemas import (
     GenerationQueueStatsOut,
     GenerationTaskIn,
     GenerationTaskOut,
+    GenerationTaskPageOut,
     GenerationTaskPatch,
     TaskParams,
     UserOut,
@@ -109,7 +110,7 @@ def resolve_generation_target(payload: GenerateIn) -> tuple[Any, ChannelModel, s
 
 def generation_diagnostic(
     code: str,
-    level: str,
+    level: Literal["info", "warning", "error"],
     title: str,
     detail: str,
     hint: str | None = None,
@@ -128,6 +129,133 @@ def normalize_generation_params(params: TaskParams, *, api_mode: str, codex_cli:
     if codex_cli and params.quality != "auto":
         updates["quality"] = "auto"
     return params.model_copy(update=updates) if updates else params
+
+
+def prepare_generation_request(payload: GenerateIn) -> tuple[GenerateIn, ChannelModel, int]:
+    _, selected_model, _, _, codex_cli, _, _ = resolve_generation_target(payload)
+    task_id = payload.taskId or new_id()
+    prepared_payload = payload.model_copy(
+        update={
+            "taskId": task_id,
+            "params": normalize_generation_params(payload.params, api_mode=selected_model.apiMode, codex_cli=codex_cli),
+        }
+    )
+    return prepared_payload, selected_model, now_ms()
+
+
+def persist_generation_submission(
+    payload: GenerateIn,
+    user: UserOut,
+    *,
+    selected_model: ChannelModel,
+    started_at: int,
+    status: Literal["queued", "running"],
+) -> GenerationTaskOut:
+    input_image_ids, mask_target_image_id, mask_image_id = persist_generation_inputs(
+        payload.model_copy(update={"taskId": None}),
+        user,
+    )
+    task = insert_generation(
+        GenerationTaskIn(
+            id=payload.taskId,
+            templateId=payload.templateId,
+            templateVersionId=payload.templateVersionId,
+            projectId=resolve_owned_project_id(payload.projectId, user),
+            parentTaskId=payload.parentTaskId,
+            experimentId=payload.experimentId,
+            variationLabel=payload.variationLabel,
+            prompt=payload.prompt,
+            params=payload.params,
+            inputImageIds=input_image_ids,
+            maskTargetImageId=mask_target_image_id,
+            maskImageId=mask_image_id,
+            outputImages=[],
+            status=status,
+            createdAt=started_at,
+            channelId=payload.channelId,
+            apiMode=selected_model.apiMode,
+            model=selected_model.id,
+        ),
+        user.id,
+    )
+    generation_asset_ids = [*input_image_ids, *([mask_image_id] if mask_image_id else [])]
+    attach_assets_to_task(user_id=user.id, task_id=task.id, asset_ids=generation_asset_ids)
+    return task
+
+
+def persist_generated_outputs(task_id: str, payload: GenerateIn, user: UserOut, images: list[str]) -> list[AssetOut]:
+    output_assets: list[AssetOut] = []
+    for data_url in images:
+        ensure_generation_not_canceled(task_id, user.id)
+        mime, data = data_url_to_bytes(data_url)
+        output_assets.append(
+            save_asset_bytes(
+                user_id=user.id,
+                data=data,
+                mime=mime,
+                asset_type="generated",
+                task_id=task_id,
+                template_id=payload.templateId,
+            )
+        )
+    return output_assets
+
+
+def finalize_generation_success(
+    task_id: str,
+    payload: GenerateIn,
+    user: UserOut,
+    *,
+    started_at: int,
+    output_assets: list[AssetOut],
+    actual_params: dict[str, Any] | None,
+    actual_params_list: list[dict[str, Any] | None] | None,
+    revised_prompts: list[str | None] | None,
+) -> GenerationTaskOut:
+    output_ids = [asset.id for asset in output_assets]
+    finished_at = now_ms()
+    ensure_generation_not_canceled(task_id, user.id)
+    task = _patch_generation(
+        task_id,
+        GenerationTaskPatch(
+            outputImages=output_ids,
+            actualParams={**actual_params, "n": len(output_ids)} if actual_params else {"n": len(output_ids)},
+            actualParamsByImage=map_actual_params_by_image(output_ids, actual_params_list or []),
+            revisedPromptByImage=map_revised_prompts_by_image(output_ids, revised_prompts or []),
+            status="done",
+            finishedAt=finished_at,
+            elapsed=finished_at - started_at,
+        ),
+        user,
+    )
+    record_template_generation_result(payload.templateId, True)
+    return task
+
+
+def finalize_generation_failure(
+    task_id: str,
+    payload: GenerateIn,
+    user: UserOut,
+    *,
+    started_at: int,
+    exc: Exception,
+    record_failure_result: bool,
+) -> None:
+    finished_at = now_ms()
+    error_message, diagnostics = classify_generation_exception(exc)
+    _patch_generation(
+        task_id,
+        GenerationTaskPatch(
+            status="error",
+            error=error_message,
+            finishedAt=finished_at,
+            elapsed=finished_at - started_at,
+            diagnostics=diagnostics,
+        ),
+        user,
+    )
+    if record_failure_result:
+        record_template_generation_result(payload.templateId, False)
 
 
 POLICY_MARKERS = (
@@ -296,6 +424,41 @@ def compact_response_text(value: Any, limit: int = 420) -> str:
     return compact_message(text, limit)
 
 
+def summarize_error_object(error: dict[str, Any], limit: int) -> str:
+    primary = (
+        error.get("message")
+        or error.get("detail")
+        or error.get("code")
+        or error.get("type")
+        or ""
+    )
+    extras: list[str] = []
+    for key in ("code", "type", "param"):
+        value = error.get(key)
+        if value and str(value) not in str(primary):
+            extras.append(f"{key}={value}")
+    if primary or extras:
+        return compact_message("；".join([str(primary).strip(), *extras]).strip("； "), limit)
+    return compact_response_text(error, limit)
+
+
+def summarize_top_level_error(data: dict[str, Any], limit: int) -> str:
+    error = data.get("error")
+    if isinstance(error, dict):
+        return summarize_error_object(error, limit)
+    if isinstance(error, str) and error.strip():
+        return compact_message(error, limit)
+
+    for key in ("detail", "message"):
+        value = data.get(key)
+        if isinstance(value, str) and value.strip():
+            return compact_message(value, limit)
+        if isinstance(value, (dict, list)):
+            return compact_response_text(value, limit)
+
+    return compact_response_text(data, limit)
+
+
 def extract_upstream_error_text(response: httpx.Response, limit: int = 220) -> str:
     fallback = compact_message(response.text or f"HTTP {response.status_code}", limit)
     try:
@@ -304,32 +467,7 @@ def extract_upstream_error_text(response: httpx.Response, limit: int = 220) -> s
         return fallback
 
     if isinstance(data, dict):
-        error = data.get("error")
-        if isinstance(error, dict):
-            primary = (
-                error.get("message")
-                or error.get("detail")
-                or error.get("code")
-                or error.get("type")
-                or ""
-            )
-            extras: list[str] = []
-            for key in ("code", "type", "param"):
-                value = error.get(key)
-                if value and str(value) not in str(primary):
-                    extras.append(f"{key}={value}")
-            if primary or extras:
-                return compact_message("；".join([str(primary).strip(), *extras]).strip("； "), limit)
-            return compact_response_text(error, limit)
-        if isinstance(error, str) and error.strip():
-            return compact_message(error, limit)
-
-        for key in ("detail", "message"):
-            value = data.get(key)
-            if isinstance(value, str) and value.strip():
-                return compact_message(value, limit)
-            if isinstance(value, (dict, list)):
-                return compact_response_text(value, limit)
+        return summarize_top_level_error(data, limit) or fallback
 
     return compact_response_text(data, limit) or fallback
 
@@ -550,59 +688,52 @@ def classify_generation_exception(exc: Exception) -> tuple[str, list[GenerationD
     return compact_message(str(exc), 220) or "生成失败", diagnostics
 
 
-def upstream_no_image_reason(data: Any, endpoint: str) -> str:
-    if not isinstance(data, dict):
-        return f"{endpoint} 返回非对象 JSON：{compact_response_text(data)}"
+def describe_responses_no_image(data: dict[str, Any]) -> str:
+    output = data.get("output")
+    if not isinstance(output, list):
+        return f"responses 响应缺少 output 数组；顶层字段：{', '.join(data.keys()) or '空'}"
+    if not output:
+        return "responses 响应 output 为空"
 
-    error = data.get("error")
-    if isinstance(error, dict):
-        message = error.get("message") or error.get("detail") or error.get("code") or error
-        return f"{endpoint} 返回错误但 HTTP 状态为成功：{compact_response_text(message)}"
-    if isinstance(error, str) and error.strip():
-        return f"{endpoint} 返回错误但 HTTP 状态为成功：{compact_response_text(error)}"
+    details: list[str] = []
+    for item in output[:4]:
+        if not isinstance(item, dict):
+            details.append(compact_response_text(item, 120))
+            continue
+        item_type = str(item.get("type") or "unknown")
+        status = str(item.get("status") or "").strip()
+        parts = [item_type]
+        if status:
+            parts.append(f"status={status}")
+        if item.get("result") in ("", None):
+            parts.append("result为空")
+        for key in ("refusal", "reason", "message"):
+            if item.get(key):
+                parts.append(f"{key}={compact_response_text(item.get(key), 160)}")
+                break
+        content = item.get("content")
+        if isinstance(content, list):
+            text = next(
+                (
+                    part.get("text")
+                    for part in content
+                    if isinstance(part, dict) and isinstance(part.get("text"), str) and part.get("text", "").strip()
+                ),
+                "",
+            )
+            if text:
+                parts.append(f"text={compact_response_text(text, 160)}")
+        details.append(" ".join(parts))
+    return f"responses 未返回 image_generation_call.result；output 摘要：{'; '.join(details)}"
 
-    if endpoint == "responses":
-        output = data.get("output")
-        if not isinstance(output, list):
-            return f"responses 响应缺少 output 数组；顶层字段：{', '.join(data.keys()) or '空'}"
-        if not output:
-            return "responses 响应 output 为空"
-        details: list[str] = []
-        for item in output[:4]:
-            if not isinstance(item, dict):
-                details.append(compact_response_text(item, 120))
-                continue
-            item_type = str(item.get("type") or "unknown")
-            status = str(item.get("status") or "").strip()
-            parts = [item_type]
-            if status:
-                parts.append(f"status={status}")
-            if item.get("result") in ("", None):
-                parts.append("result为空")
-            for key in ("refusal", "reason", "message"):
-                if item.get(key):
-                    parts.append(f"{key}={compact_response_text(item.get(key), 160)}")
-                    break
-            content = item.get("content")
-            if isinstance(content, list):
-                text = next(
-                    (
-                        part.get("text")
-                        for part in content
-                        if isinstance(part, dict) and isinstance(part.get("text"), str) and part.get("text", "").strip()
-                    ),
-                    "",
-                )
-                if text:
-                    parts.append(f"text={compact_response_text(text, 160)}")
-            details.append(" ".join(parts))
-        return f"responses 未返回 image_generation_call.result；output 摘要：{'; '.join(details)}"
 
+def describe_images_no_image(data: dict[str, Any]) -> str:
     items = data.get("data")
     if not isinstance(items, list):
         return f"images 响应缺少 data 数组；顶层字段：{', '.join(data.keys()) or '空'}"
     if not items:
         return "images 响应 data 为空"
+
     item_summaries: list[str] = []
     for item in items[:4]:
         if not isinstance(item, dict):
@@ -615,6 +746,22 @@ def upstream_no_image_reason(data: Any, endpoint: str) -> str:
             + (f"；说明={compact_response_text(reason, 160)}" if reason else "")
         )
     return f"images data 中没有 b64_json/url；条目摘要：{'; '.join(item_summaries)}"
+
+
+def upstream_no_image_reason(data: Any, endpoint: str) -> str:
+    if not isinstance(data, dict):
+        return f"{endpoint} 返回非对象 JSON：{compact_response_text(data)}"
+
+    error = data.get("error")
+    if isinstance(error, dict):
+        message = error.get("message") or error.get("detail") or error.get("code") or error
+        return f"{endpoint} 返回错误但 HTTP 状态为成功：{compact_response_text(message)}"
+    if isinstance(error, str) and error.strip():
+        return f"{endpoint} 返回错误但 HTTP 状态为成功：{compact_response_text(error)}"
+
+    if endpoint == "responses":
+        return describe_responses_no_image(data)
+    return describe_images_no_image(data)
 
 
 async def fetch_image_as_data_url(client: httpx.AsyncClient, url: str, fallback_mime: str) -> str:
@@ -661,6 +808,158 @@ def remember_auto_codex_detection(channel_id: str, codex_cli: bool) -> None:
         )
 
 
+def prompt_text_for_api(prompt: str, codex_cli: bool) -> str:
+    return prompt if not codex_cli else f"Use the following text as the complete prompt. Do not rewrite it:\n{prompt}"
+
+
+def build_responses_request_body(
+    payload: GenerateIn,
+    selected_model: ChannelModel,
+    codex_cli: bool,
+) -> dict[str, Any]:
+    return {
+        "model": selected_model.id,
+        "input": {
+            "role": "user",
+            "content": [
+                {"type": "input_text", "text": prompt_text_for_api(payload.prompt, True)},
+                *[
+                    {"type": "input_image", "image_url": data_url}
+                    for data_url in payload.inputImageDataUrls
+                ],
+            ],
+        }
+        if payload.inputImageDataUrls
+        else prompt_text_for_api(payload.prompt, True),
+        "tools": [
+            {
+                "type": "image_generation",
+                "action": "edit" if payload.inputImageDataUrls else "generate",
+                "size": payload.params.size,
+                "output_format": payload.params.output_format,
+                **({} if codex_cli else {"quality": payload.params.quality}),
+                **(
+                    {"output_compression": payload.params.output_compression}
+                    if payload.params.output_format != "png" and payload.params.output_compression is not None
+                    else {}
+                ),
+                **({"input_image_mask": {"image_url": payload.maskDataUrl}} if payload.maskDataUrl else {}),
+            }
+        ],
+        "tool_choice": "required",
+    }
+
+
+def build_images_edit_request(
+    payload: GenerateIn,
+    selected_model: ChannelModel,
+    codex_cli: bool,
+) -> tuple[dict[str, str], list[tuple[str, tuple[str, bytes, str]]]]:
+    files: list[tuple[str, tuple[str, bytes, str]]] = []
+    for index, data_url in enumerate(payload.inputImageDataUrls):
+        mime, data = data_url_to_bytes(data_url)
+        files.append(("image[]", (f"input-{index + 1}{asset_ext(mime)}", data, mime)))
+    if payload.maskDataUrl:
+        mask_mime, mask_data = data_url_to_bytes(payload.maskDataUrl)
+        files.append(("mask", ("mask.png", mask_data, mask_mime)))
+    form = {
+        "model": selected_model.id,
+        "prompt": prompt_text_for_api(payload.prompt, codex_cli),
+        "size": payload.params.size,
+        "output_format": payload.params.output_format,
+        "moderation": payload.params.moderation,
+    }
+    if not codex_cli:
+        form["quality"] = payload.params.quality
+    if payload.params.output_format != "png" and payload.params.output_compression is not None:
+        form["output_compression"] = str(payload.params.output_compression)
+    if payload.params.n > 1:
+        form["n"] = str(payload.params.n)
+    return form, files
+
+
+def build_images_generation_body(
+    payload: GenerateIn,
+    selected_model: ChannelModel,
+    codex_cli: bool,
+) -> dict[str, Any]:
+    body: dict[str, Any] = {
+        "model": selected_model.id,
+        "prompt": prompt_text_for_api(payload.prompt, codex_cli),
+        "size": payload.params.size,
+        "output_format": payload.params.output_format,
+        "moderation": payload.params.moderation,
+    }
+    if not codex_cli:
+        body["quality"] = payload.params.quality
+    if payload.params.output_format != "png" and payload.params.output_compression is not None:
+        body["output_compression"] = payload.params.output_compression
+    if payload.params.n > 1:
+        body["n"] = payload.params.n
+    return body
+
+
+def parse_responses_output(
+    data: dict[str, Any],
+    fallback_mime: str,
+) -> tuple[list[str], dict[str, Any] | None, list[dict[str, Any] | None], list[str | None]]:
+    results: list[str] = []
+    actual_params_list: list[dict[str, Any] | None] = []
+    revised_prompts: list[str | None] = []
+    for item in data.get("output", []):
+        if item.get("type") != "image_generation_call":
+            continue
+        result = item.get("result")
+        if isinstance(result, str) and result.strip():
+            results.append(normalize_base64_image(result, fallback_mime))
+            actual_params_list.append(pick_actual_params(item) or None)
+            revised_prompts.append(item.get("revised_prompt"))
+    if not results:
+        raise ValueError(f"接口未返回可用图片数据：{upstream_no_image_reason(data, 'responses')}")
+    return results, actual_params_list[0], actual_params_list, revised_prompts
+
+
+async def parse_images_output(
+    client: httpx.AsyncClient,
+    data: dict[str, Any],
+    fallback_mime: str,
+) -> tuple[list[str], dict[str, Any] | None, list[dict[str, Any] | None], list[str | None]]:
+    images: list[str] = []
+    revised_prompts: list[str | None] = []
+    for item in data.get("data", []):
+        if item.get("b64_json"):
+            images.append(normalize_base64_image(item["b64_json"], fallback_mime))
+            revised_prompts.append(item.get("revised_prompt"))
+        elif item.get("url"):
+            images.append(await fetch_image_as_data_url(client, item["url"], fallback_mime))
+            revised_prompts.append(item.get("revised_prompt"))
+    if not images:
+        raise ValueError(f"接口未返回可用图片数据：{upstream_no_image_reason(data, 'images')}")
+    actual_params = pick_actual_params(data) or None
+    return images, actual_params, [actual_params for _ in images], revised_prompts
+
+
+def should_retry_as_codex_cli(exc: httpx.HTTPStatusError, codex_cli_mode: CodexCliMode, codex_cli: bool) -> bool:
+    return codex_cli_mode == "auto" and not codex_cli and is_unsupported_quality_error(exc)
+
+
+def health_status_for_http_error(status_code: int) -> ChannelHealthStatus:
+    return "error" if status_code not in {404, 429} else "degraded"
+
+
+def build_channel_health_message(
+    exc: Exception,
+    diagnostics: list[GenerationDiagnosticOut],
+    fallback: str,
+) -> str:
+    error_message, _ = classify_generation_exception(exc)
+    primary = diagnostics[0] if diagnostics else None
+    health_message = primary.title if primary and primary.title else fallback
+    if error_message and error_message != health_message:
+        health_message = f"{health_message}：{error_message}"
+    return health_message
+
+
 async def call_upstream_once(
     client: httpx.AsyncClient,
     payload: GenerateIn,
@@ -677,108 +976,30 @@ async def call_upstream_once(
     }
 
     if selected_model.apiMode == "responses":
-        body: dict[str, Any] = {
-            "model": selected_model.id,
-            "input": {
-                "role": "user",
-                "content": [
-                    {"type": "input_text", "text": f"Use the following text as the complete prompt. Do not rewrite it:\n{payload.prompt}"},
-                    *[
-                        {"type": "input_image", "image_url": data_url}
-                        for data_url in payload.inputImageDataUrls
-                    ],
-                ],
-            }
-            if payload.inputImageDataUrls
-            else f"Use the following text as the complete prompt. Do not rewrite it:\n{payload.prompt}",
-            "tools": [
-                {
-                    "type": "image_generation",
-                    "action": "edit" if payload.inputImageDataUrls else "generate",
-                    "size": payload.params.size,
-                    "output_format": payload.params.output_format,
-                    **({} if codex_cli else {"quality": payload.params.quality}),
-                    **(
-                        {"output_compression": payload.params.output_compression}
-                        if payload.params.output_format != "png" and payload.params.output_compression is not None
-                        else {}
-                    ),
-                    **({"input_image_mask": {"image_url": payload.maskDataUrl}} if payload.maskDataUrl else {}),
-                }
-            ],
-            "tool_choice": "required",
-        }
-        response = await client.post(endpoint_url(base_url, "responses"), headers={**headers, "Content-Type": "application/json"}, json=body)
+        body = build_responses_request_body(payload, selected_model, codex_cli)
+        response = await client.post(
+            endpoint_url(base_url, "responses"),
+            headers={**headers, "Content-Type": "application/json"},
+            json=body,
+        )
         response.raise_for_status()
         data = response.json()
-        results: list[str] = []
-        actual_params_list: list[dict[str, Any] | None] = []
-        revised_prompts: list[str | None] = []
-        for item in data.get("output", []):
-            if item.get("type") != "image_generation_call":
-                continue
-            result = item.get("result")
-            if isinstance(result, str) and result.strip():
-                results.append(normalize_base64_image(result, fallback_mime))
-                actual_params_list.append(pick_actual_params(item) or None)
-                revised_prompts.append(item.get("revised_prompt"))
-        if not results:
-            raise ValueError(f"接口未返回可用图片数据：{upstream_no_image_reason(data, 'responses')}")
-        return results, actual_params_list[0], actual_params_list, revised_prompts
+        return parse_responses_output(data, fallback_mime)
 
     if payload.inputImageDataUrls:
-        files: list[tuple[str, tuple[str, bytes, str]]] = []
-        for index, data_url in enumerate(payload.inputImageDataUrls):
-            mime, data = data_url_to_bytes(data_url)
-            files.append(("image[]", (f"input-{index + 1}{asset_ext(mime)}", data, mime)))
-        if payload.maskDataUrl:
-            mask_mime, mask_data = data_url_to_bytes(payload.maskDataUrl)
-            files.append(("mask", ("mask.png", mask_data, mask_mime)))
-        form = {
-            "model": selected_model.id,
-            "prompt": payload.prompt if not codex_cli else f"Use the following text as the complete prompt. Do not rewrite it:\n{payload.prompt}",
-            "size": payload.params.size,
-            "output_format": payload.params.output_format,
-            "moderation": payload.params.moderation,
-        }
-        if not codex_cli:
-            form["quality"] = payload.params.quality
-        if payload.params.output_format != "png" and payload.params.output_compression is not None:
-            form["output_compression"] = str(payload.params.output_compression)
-        if payload.params.n > 1:
-            form["n"] = str(payload.params.n)
+        form, files = build_images_edit_request(payload, selected_model, codex_cli)
         response = await client.post(endpoint_url(base_url, "images/edits"), headers=headers, data=form, files=files)
     else:
-        body = {
-            "model": selected_model.id,
-            "prompt": payload.prompt if not codex_cli else f"Use the following text as the complete prompt. Do not rewrite it:\n{payload.prompt}",
-            "size": payload.params.size,
-            "output_format": payload.params.output_format,
-            "moderation": payload.params.moderation,
-        }
-        if not codex_cli:
-            body["quality"] = payload.params.quality
-        if payload.params.output_format != "png" and payload.params.output_compression is not None:
-            body["output_compression"] = payload.params.output_compression
-        if payload.params.n > 1:
-            body["n"] = payload.params.n
-        response = await client.post(endpoint_url(base_url, "images/generations"), headers={**headers, "Content-Type": "application/json"}, json=body)
+        body = build_images_generation_body(payload, selected_model, codex_cli)
+        response = await client.post(
+            endpoint_url(base_url, "images/generations"),
+            headers={**headers, "Content-Type": "application/json"},
+            json=body,
+        )
 
     response.raise_for_status()
     data = response.json()
-    images: list[str] = []
-    revised_prompts: list[str | None] = []
-    for item in data.get("data", []):
-        if item.get("b64_json"):
-            images.append(normalize_base64_image(item["b64_json"], fallback_mime))
-            revised_prompts.append(item.get("revised_prompt"))
-        elif item.get("url"):
-            images.append(await fetch_image_as_data_url(client, item["url"], fallback_mime))
-            revised_prompts.append(item.get("revised_prompt"))
-    if not images:
-        raise ValueError(f"接口未返回可用图片数据：{upstream_no_image_reason(data, 'images')}")
-    actual_params = pick_actual_params(data) or None
-    return images, actual_params, [actual_params for _ in images], revised_prompts
+    return await parse_images_output(client, data, fallback_mime)
 
 
 async def call_upstream(payload: GenerateIn) -> tuple[list[str], dict[str, Any] | None, list[dict[str, Any] | None], list[str | None]]:
@@ -797,37 +1018,41 @@ async def call_upstream(payload: GenerateIn) -> tuple[list[str], dict[str, Any] 
                 remember_auto_codex_detection(channel_row["id"], codex_cli)
             return result
         except httpx.HTTPStatusError as exc:
-            if codex_cli_mode == "auto" and not codex_cli and is_unsupported_quality_error(exc):
+            if should_retry_as_codex_cli(exc, codex_cli_mode, codex_cli):
                 remember_auto_codex_detection(channel_row["id"], True)
                 result = await call_upstream_once(client, payload, selected_model, api_key, base_url, fallback_mime, True)
                 record_channel_health(channel_row["id"], "healthy", "最近一次生成请求成功")
                 return result
-            status: ChannelHealthStatus = "error" if exc.response.status_code not in {404, 429} else "degraded"
-            error_message, diagnostics = classify_generation_exception(exc)
-            primary = diagnostics[0] if diagnostics else None
-            health_message = primary.title if primary and primary.title else f"最近一次生成请求失败，HTTP {exc.response.status_code}"
-            if error_message and error_message != health_message:
-                health_message = f"{health_message}：{error_message}"
-            record_channel_health(channel_row["id"], status, health_message)
+            diagnostics = diagnostics_from_generation_exception(exc)
+            record_channel_health(
+                channel_row["id"],
+                health_status_for_http_error(exc.response.status_code),
+                build_channel_health_message(exc, diagnostics, f"最近一次生成请求失败，HTTP {exc.response.status_code}"),
+            )
             raise
-        except httpx.TimeoutException:
-            record_channel_health(channel_row["id"], "error", "最近一次生成请求超时")
+        except httpx.TimeoutException as exc:
+            diagnostics = diagnostics_from_generation_exception(exc)
+            record_channel_health(
+                channel_row["id"],
+                "error",
+                build_channel_health_message(exc, diagnostics, "最近一次生成请求超时"),
+            )
             raise
         except httpx.HTTPError as exc:
-            error_message, diagnostics = classify_generation_exception(exc)
-            primary = diagnostics[0] if diagnostics else None
-            health_message = primary.title if primary and primary.title else "最近一次生成请求失败"
-            if error_message and error_message != health_message:
-                health_message = f"{health_message}：{error_message}"
-            record_channel_health(channel_row["id"], "error", health_message)
+            diagnostics = diagnostics_from_generation_exception(exc)
+            record_channel_health(
+                channel_row["id"],
+                "error",
+                build_channel_health_message(exc, diagnostics, "最近一次生成请求失败"),
+            )
             raise
         except ValueError as exc:
-            error_message, diagnostics = classify_generation_exception(exc)
-            primary = diagnostics[0] if diagnostics else None
-            health_message = primary.title if primary and primary.title else "最近一次生成请求未返回可用图片"
-            if error_message and error_message != health_message:
-                health_message = f"{health_message}：{error_message}"
-            record_channel_health(channel_row["id"], "degraded", health_message)
+            diagnostics = diagnostics_from_generation_exception(exc)
+            record_channel_health(
+                channel_row["id"],
+                "degraded",
+                build_channel_health_message(exc, diagnostics, "最近一次生成请求未返回可用图片"),
+            )
             raise
 
 
@@ -987,7 +1212,7 @@ def prepare_generation_execution(task_id: str) -> GenerationExecution | None:
     return GenerationExecution(
         task_id=task_id,
         user_id=user.id,
-        started_at=row["created_at"],
+        started_at=now_ms(),
         payload=payload,
         user=user,
     )
@@ -1128,37 +1353,17 @@ async def complete_generation_task(payload: GenerateIn, user: UserOut, started_a
         ensure_generation_not_canceled(task_id, user.id)
         images, actual_params, actual_params_list, revised_prompts = await call_upstream(payload)
         ensure_generation_not_canceled(task_id, user.id)
-        output_assets: list[AssetOut] = []
-        for data_url in images:
-            ensure_generation_not_canceled(task_id, user.id)
-            mime, data = data_url_to_bytes(data_url)
-            output_assets.append(
-                save_asset_bytes(
-                    user_id=user.id,
-                    data=data,
-                    mime=mime,
-                    asset_type="generated",
-                    task_id=task_id,
-                    template_id=payload.templateId,
-                )
-            )
-        output_ids = [asset.id for asset in output_assets]
-        finished_at = now_ms()
-        ensure_generation_not_canceled(task_id, user.id)
-        task = _patch_generation(
+        output_assets = persist_generated_outputs(task_id, payload, user, images)
+        task = finalize_generation_success(
             task_id,
-            GenerationTaskPatch(
-                outputImages=output_ids,
-                actualParams={**actual_params, "n": len(output_ids)} if actual_params else {"n": len(output_ids)},
-                actualParamsByImage=map_actual_params_by_image(output_ids, actual_params_list),
-                revisedPromptByImage=map_revised_prompts_by_image(output_ids, revised_prompts),
-                status="done",
-                finishedAt=finished_at,
-                elapsed=finished_at - started_at,
-            ),
+            payload,
             user,
+            started_at=started_at,
+            output_assets=output_assets,
+            actual_params=actual_params,
+            actual_params_list=actual_params_list,
+            revised_prompts=revised_prompts,
         )
-        record_template_generation_result(payload.templateId, True)
         return GenerateOut(
             task=task,
             images=images,
@@ -1168,20 +1373,16 @@ async def complete_generation_task(payload: GenerateIn, user: UserOut, started_a
             revisedPrompts=revised_prompts,
         )
     except (httpx.HTTPError, ValueError, ValidationError, HTTPException) as exc:
-        finished_at = now_ms()
-        error_message, diagnostics = classify_generation_exception(exc)
-        _patch_generation(
+        if get_generation_status(task_id, user.id) == "canceled":
+            raise
+        finalize_generation_failure(
             task_id,
-            GenerationTaskPatch(
-                status="error",
-                error=error_message,
-                finishedAt=finished_at,
-                elapsed=finished_at - started_at,
-                diagnostics=diagnostics,
-            ),
+            payload,
             user,
+            started_at=started_at,
+            exc=exc,
+            record_failure_result=True,
         )
-        record_template_generation_result(payload.templateId, False)
         raise
 
 
@@ -1189,20 +1390,18 @@ async def complete_generation_task_safely(payload: GenerateIn, user: UserOut, st
     try:
         await complete_generation_task(payload, user, started_at)
     except Exception as exc:
-        if payload.taskId:
-            finished_at = now_ms()
-            error_message, diagnostics = classify_generation_exception(exc)
-            _patch_generation(
-                payload.taskId,
-                GenerationTaskPatch(
-                    status="error",
-                    error=error_message,
-                    finishedAt=finished_at,
-                    elapsed=finished_at - started_at,
-                    diagnostics=diagnostics,
-                ),
-                user,
-            )
+        if not payload.taskId:
+            return
+        if get_generation_status(payload.taskId, user.id) in FINAL_TASK_STATUSES:
+            return
+        finalize_generation_failure(
+            payload.taskId,
+            payload,
+            user,
+            started_at=started_at,
+            exc=exc,
+            record_failure_result=False,
+        )
         return
 
 
@@ -1237,14 +1436,35 @@ def generation_preflight(payload: GenerationPreflightIn, user: UserOut = Depends
     )
 
 
-@router.get("/api/generations", response_model=list[GenerationTaskOut])
-def list_generations(user: UserOut = Depends(require_user)) -> list[GenerationTaskOut]:
+@router.get("/api/generations", response_model=GenerationTaskPageOut)
+def list_generations(
+    limit: int = Query(80, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    user: UserOut = Depends(require_user),
+) -> GenerationTaskPageOut:
     with get_conn() as conn:
+        total = int(
+            conn.execute(
+                "SELECT COUNT(*) FROM generation_tasks WHERE user_id = ?",
+                (user.id,),
+            ).fetchone()[0]
+        )
         rows = conn.execute(
-            "SELECT * FROM generation_tasks WHERE user_id = ? ORDER BY created_at DESC",
-            (user.id,),
+            """
+            SELECT * FROM generation_tasks
+            WHERE user_id = ?
+            ORDER BY created_at DESC
+            LIMIT ? OFFSET ?
+            """,
+            (user.id, limit, offset),
         ).fetchall()
-    return [row_to_task(row) for row in rows]
+    return GenerationTaskPageOut(
+        items=[row_to_task(row) for row in rows],
+        total=total,
+        limit=limit,
+        offset=offset,
+        hasMore=offset + len(rows) < total,
+    )
 
 
 @router.get("/api/generations/queue-stats", response_model=GenerationQueueStatsOut)
@@ -1447,46 +1667,16 @@ def batch_delete_generations(payload: BatchDeleteIn, user: UserOut = Depends(req
 
 @router.post("/api/generations/run", response_model=GenerateRunOut)
 async def run_generation(payload: GenerateIn, user: UserOut = Depends(require_user)) -> GenerateRunOut:
-    _, selected_model, _, _, codex_cli, _, _ = resolve_generation_target(payload)
-    task_id = payload.taskId or new_id()
-    payload = payload.model_copy(
-        update={
-            "taskId": task_id,
-            "params": normalize_generation_params(payload.params, api_mode=selected_model.apiMode, codex_cli=codex_cli),
-        }
-    )
-    started_at = now_ms()
-    input_image_ids, mask_target_image_id, mask_image_id = persist_generation_inputs(
-        payload.model_copy(update={"taskId": None}),
+    payload, selected_model, started_at = prepare_generation_request(payload)
+    task = persist_generation_submission(
+        payload,
         user,
+        selected_model=selected_model,
+        started_at=started_at,
+        status="queued",
     )
-    task = insert_generation(
-        GenerationTaskIn(
-            id=task_id,
-            templateId=payload.templateId,
-            templateVersionId=payload.templateVersionId,
-            projectId=resolve_owned_project_id(payload.projectId, user),
-            parentTaskId=payload.parentTaskId,
-            experimentId=payload.experimentId,
-            variationLabel=payload.variationLabel,
-            prompt=payload.prompt,
-            params=payload.params,
-            inputImageIds=input_image_ids,
-            maskTargetImageId=mask_target_image_id,
-            maskImageId=mask_image_id,
-            outputImages=[],
-            status="queued",
-            createdAt=started_at,
-            channelId=payload.channelId,
-            apiMode=selected_model.apiMode,
-            model=selected_model.id,
-        ),
-        user.id,
-    )
-    generation_asset_ids = [*input_image_ids, *([mask_image_id] if mask_image_id else [])]
-    attach_assets_to_task(user_id=user.id, task_id=task_id, asset_ids=generation_asset_ids)
     ensure_generation_workers()
-    await _state.GENERATION_RUNTIME.queue_task(task_id)
+    await _state.GENERATION_RUNTIME.queue_task(task.id)
     return GenerateRunOut(task=task)
 
 
@@ -1504,44 +1694,14 @@ async def cancel_generation(task_id: str, user: UserOut = Depends(require_user))
 @router.post("/api/generate", response_model=GenerateOut)
 async def generate(payload: GenerateIn, user: UserOut = Depends(require_user)) -> GenerateOut:
     assert_generation_not_rate_limited(user.id)
-    _, selected_model, _, _, codex_cli, _, _ = resolve_generation_target(payload)
-    task_id = payload.taskId or new_id()
-    payload = payload.model_copy(
-        update={
-            "taskId": task_id,
-            "params": normalize_generation_params(payload.params, api_mode=selected_model.apiMode, codex_cli=codex_cli),
-        }
-    )
-    started_at = now_ms()
-    input_image_ids, mask_target_image_id, mask_image_id = persist_generation_inputs(
-        payload.model_copy(update={"taskId": None}),
+    payload, selected_model, started_at = prepare_generation_request(payload)
+    persist_generation_submission(
+        payload,
         user,
+        selected_model=selected_model,
+        started_at=started_at,
+        status="running",
     )
-    insert_generation(
-        GenerationTaskIn(
-            id=task_id,
-            templateId=payload.templateId,
-            templateVersionId=payload.templateVersionId,
-            projectId=resolve_owned_project_id(payload.projectId, user),
-            parentTaskId=payload.parentTaskId,
-            experimentId=payload.experimentId,
-            variationLabel=payload.variationLabel,
-            prompt=payload.prompt,
-            params=payload.params,
-            inputImageIds=input_image_ids,
-            maskTargetImageId=mask_target_image_id,
-            maskImageId=mask_image_id,
-            outputImages=[],
-            status="running",
-            createdAt=started_at,
-            channelId=payload.channelId,
-            apiMode=selected_model.apiMode,
-            model=selected_model.id,
-        ),
-        user.id,
-    )
-    generation_asset_ids = [*input_image_ids, *([mask_image_id] if mask_image_id else [])]
-    attach_assets_to_task(user_id=user.id, task_id=task_id, asset_ids=generation_asset_ids)
     try:
         return await complete_generation_task(payload, user, started_at)
     except (httpx.HTTPError, ValueError, ValidationError, HTTPException) as exc:

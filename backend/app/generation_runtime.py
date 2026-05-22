@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Coroutine
 from dataclasses import dataclass
-from typing import Any, Awaitable, Callable
+from typing import Any, Callable
 
 
 @dataclass(frozen=True)
@@ -15,7 +16,7 @@ class GenerationExecution:
 
 
 PrepareExecution = Callable[[str], GenerationExecution | None]
-RunExecution = Callable[[Any, Any, int], Awaitable[None]]
+RunExecution = Callable[[Any, Any, int], Coroutine[Any, Any, None]]
 MarkCanceled = Callable[[str, str, int], Any]
 
 
@@ -88,6 +89,8 @@ class GenerationRuntime:
                     self._mark_canceled(execution.task_id, execution.user_id, execution.started_at)
                 finally:
                     self.active_tasks.pop(task_id, None)
+            except Exception:
+                pass
             finally:
                 self.queue.task_done()
 

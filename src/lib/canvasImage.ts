@@ -1,6 +1,6 @@
 import { assertUsableMaskCoverage, classifyMaskAlpha, type MaskCoverage } from './mask'
 
-export interface ImageDimensions {
+interface ImageDimensions {
   width: number
   height: number
 }
@@ -14,18 +14,18 @@ export async function loadImage(dataUrl: string): Promise<HTMLImageElement> {
   })
 }
 
-export async function getImageDimensions(dataUrl: string): Promise<ImageDimensions> {
+async function getImageDimensions(dataUrl: string): Promise<ImageDimensions> {
   const image = await loadImage(dataUrl)
   return { width: image.naturalWidth, height: image.naturalHeight }
 }
 
-export async function dataUrlToBlob(dataUrl: string, fallbackType = 'image/png'): Promise<Blob> {
+async function dataUrlToBlob(dataUrl: string, fallbackType = 'image/png'): Promise<Blob> {
   const response = await fetch(dataUrl)
   const blob = await response.blob()
   return blob.type ? blob : new Blob([await blob.arrayBuffer()], { type: fallbackType })
 }
 
-export async function imageDataUrlToPngBlob(dataUrl: string): Promise<Blob> {
+async function imageDataUrlToPngBlob(dataUrl: string): Promise<Blob> {
   const image = await loadImage(dataUrl)
   const canvas = document.createElement('canvas')
   canvas.width = image.naturalWidth
@@ -36,7 +36,7 @@ export async function imageDataUrlToPngBlob(dataUrl: string): Promise<Blob> {
   return canvasToBlob(canvas, 'image/png')
 }
 
-export async function maskDataUrlToPngBlob(maskDataUrl: string): Promise<Blob> {
+async function maskDataUrlToPngBlob(maskDataUrl: string): Promise<Blob> {
   const blob = await dataUrlToBlob(maskDataUrl, 'image/png')
   if (blob.type !== 'image/png') {
     return imageDataUrlToPngBlob(maskDataUrl)

@@ -1,5 +1,7 @@
 import { useEffect, useState, useMemo, useRef } from 'react'
-import { useStore, getCachedImage, ensureImageCached, reuseConfig, editOutputs, removeTask, updateTaskInStore, showCodexCliPrompt, getCodexCliPromptKey, setTemplateCover } from '../store'
+import { useStore, getCachedImage, ensureImageCached, reuseConfig, editOutputs, removeTask, showCodexCliPrompt, getCodexCliPromptKey } from '../store'
+import { setTemplateCover } from '../storeTemplateActions'
+import { updateTaskInStore } from '../storeTaskMutations'
 import { cancelTask, generateVariation } from '../storeBackend'
 import { useCloseOnEscape } from '../hooks/useCloseOnEscape'
 import { formatImageRatio } from '../lib/size'

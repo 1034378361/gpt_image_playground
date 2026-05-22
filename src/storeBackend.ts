@@ -16,7 +16,7 @@ import type {
   TaskParams,
   TaskRecord,
 } from './types'
-import { DEFAULT_PARAMS } from './types'
+import { DEFAULT_PARAMS, DEFAULT_SETTINGS } from './types'
 import {
   deleteImage,
   evictOldImages,
@@ -33,27 +33,27 @@ import {
 import { validateMaskMatchesImage } from './lib/canvasImage'
 import { orderInputImagesForMask } from './lib/mask'
 import { normalizeImageSize } from './lib/size'
-import { normalizeSelectedProjectId } from './lib/templateUtils'
+import { normalizeSelectedProjectId, getTemplateCoverImageIds } from './lib/templateUtils'
 import * as backendApi from './lib/backendApi'
 import {
   ensureImageCached,
-  genId,
-  getTemplateCoverImageIds,
   imageCache,
-  isActiveTaskStatus,
   isServerStorageReady,
-  linkTaskToTemplate,
-  syncChannelSelection,
-  updateTaskInStore,
   useStore,
 } from './store'
+import { updateTaskInStore } from './storeTaskMutations'
 import { canManageSystem, canReviewTemplates } from './lib/roles'
 import { getTaskFailureSummary } from './lib/taskDiagnostics'
+
+const INITIAL_TASK_LIMIT = 80
+const INITIAL_TEMPLATE_LIMIT = 80
 
 function resetSyncedServerState() {
   const state = useStore.getState()
   state.setTemplates([])
   state.setTasks([])
+  state.setTemplatePage({ total: 0, loaded: 0, hasMore: false, loadingMore: false })
+  state.setTaskPage({ total: 0, loaded: 0, hasMore: false, loadingMore: false })
   state.setChannels([])
   state.setAdminChannels([])
   state.setAdminUsers([])
@@ -70,6 +70,50 @@ function resetSyncedServerState() {
   state.setShowSettings(false)
 }
 
+let uid = 0
+function genId(): string {
+  return Date.now().toString(36) + (++uid).toString(36) + Math.random().toString(36).slice(2, 6)
+}
+
+function isActiveTaskStatus(status: TaskRecord['status']): boolean {
+  return status === 'queued' || status === 'running'
+}
+
+function pickEnabledModel(channel: ApiChannel | undefined, preferredModelId?: string | null) {
+  if (!channel) return null
+  const enabledModels = channel.models.filter((model) => model.enabled)
+  if (!enabledModels.length) return null
+  return enabledModels.find((model) => model.id === preferredModelId) ?? enabledModels[0]
+}
+
+function syncChannelSelection(channels = useStore.getState().channels) {
+  const state = useStore.getState()
+  const currentChannel = channels.find((channel) => channel.id === state.settings.channelId)
+  const fallbackChannel =
+    (currentChannel && pickEnabledModel(currentChannel, state.settings.model) ? currentChannel : null) ??
+    channels.find((channel) => pickEnabledModel(channel))
+
+  if (!fallbackChannel) {
+    state.setSettings({
+      channelId: '',
+      model: '',
+      apiMode: DEFAULT_SETTINGS.apiMode,
+      codexCli: false,
+    })
+    return
+  }
+
+  const selectedModel = pickEnabledModel(fallbackChannel, state.settings.model)
+  if (!selectedModel) return
+
+  state.setSettings({
+    channelId: fallbackChannel.id,
+    model: selectedModel.id,
+    apiMode: selectedModel.apiMode,
+    codexCli: fallbackChannel.codexCli,
+  })
+}
+
 function describeBackendUnavailable(err: unknown): string {
   const message = err instanceof Error ? err.message : String(err)
   if (/Unexpected token|JSON|Failed to fetch|NetworkError|Load failed/i.test(message)) {
@@ -81,13 +125,13 @@ function describeBackendUnavailable(err: unknown): string {
 export async function initStore() {
   useStore.getState().setSettings({})
   const [tasks, templates] = await Promise.all([getAllTasks(), getAllTemplates()])
-  useStore.getState().setTasks(tasks)
-  useStore.getState().setTemplates(templates)
+  useStore.getState().setTasks(Array.isArray(tasks) ? tasks : [])
+  useStore.getState().setTemplates(Array.isArray(templates) ? templates : [])
 
   await loadBackendSession({ silent: true })
 
-  const currentTasks = useStore.getState().tasks
-  const currentTemplates = useStore.getState().templates
+  const currentTasks = useStore.getState().tasks ?? []
+  const currentTemplates = useStore.getState().templates ?? []
   const referencedIds = new Set<string>()
   for (const task of currentTasks) {
     for (const id of task.inputImageIds || []) referencedIds.add(id)
@@ -263,7 +307,10 @@ async function queuePreparedTask(
     model: overrides.model || settings.model,
   }
 
-  useStore.getState().setTasks([task, ...useStore.getState().tasks])
+  const state = useStore.getState()
+  const nextTasks = [task, ...state.tasks]
+  state.setTasks(nextTasks)
+  state.setTaskPage({ total: state.taskPage.total + 1, loaded: nextTasks.length })
   await putTask(task)
 
   if (prepared.sourceTemplate) {
@@ -273,6 +320,18 @@ async function queuePreparedTask(
   void refreshQueueStats()
   void executeServerTask(taskId)
   return task
+}
+
+async function linkTaskToTemplate(templateId: string, taskId: string) {
+  const template = useStore.getState().templates.find((item) => item.id === templateId)
+  if (!template) return
+  if (template.linkedTaskIds.includes(taskId)) return
+  const updated = await backendApi.patchTemplate(useStore.getState().settings, templateId, {
+    linkedTaskIds: [taskId, ...template.linkedTaskIds],
+  })
+  useStore.getState().setTemplates(
+    useStore.getState().templates.map((item) => (item.id === templateId ? updated : item)),
+  )
 }
 
 function clearComposerAfterTaskQueued() {
@@ -653,6 +712,8 @@ export async function syncServerData() {
     backendUser,
     setTemplates,
     setTasks,
+    setTemplatePage,
+    setTaskPage,
     setChannels,
     setAdminChannels,
     setAdminUsers,
@@ -675,30 +736,42 @@ export async function syncServerData() {
     const [
       channels,
       projects,
-      templates,
-      tasks,
+      templatePage,
+      taskPage,
       channelLeaderboard,
       queueStats,
     ] = await Promise.all([
       backendApi.listChannels(settings),
       backendApi.listProjects(settings),
-      backendApi.listTemplates(settings),
-      backendApi.listGenerations(settings),
+      backendApi.listTemplates(settings, { limit: INITIAL_TEMPLATE_LIMIT, offset: 0 }),
+      backendApi.listGenerations(settings, { limit: INITIAL_TASK_LIMIT, offset: 0 }),
       backendApi.listChannelLeaderboard(settings),
       backendApi.getGenerationQueueStats(settings),
     ]) as [
       ApiChannel[],
       ProjectBoard[],
-      PromptTemplate[],
-      TaskRecord[],
+      backendApi.PageResult<PromptTemplate>,
+      backendApi.PageResult<TaskRecord>,
       ChannelLeaderboardItem[],
       GenerationQueueStats,
     ]
 
     setChannels(channels)
     setProjects(projects)
-    setTemplates(templates)
-    setTasks(tasks)
+    setTemplates(templatePage.items)
+    setTasks(taskPage.items)
+    setTemplatePage({
+      total: templatePage.total,
+      loaded: templatePage.items.length,
+      hasMore: templatePage.hasMore,
+      loadingMore: false,
+    })
+    setTaskPage({
+      total: taskPage.total,
+      loaded: taskPage.items.length,
+      hasMore: taskPage.hasMore,
+      loadingMore: false,
+    })
     setChannelLeaderboard(channelLeaderboard)
     setQueueStats(queueStats)
     syncChannelSelection(channels)
@@ -712,6 +785,54 @@ export async function syncServerData() {
     })
   } catch (err) {
     showToast(`同步后端数据失败：${err instanceof Error ? err.message : String(err)}`, 'error')
+  }
+}
+
+export async function loadMoreServerTasks() {
+  const state = useStore.getState()
+  if (!state.backendUser || state.taskPage.loadingMore || !state.taskPage.hasMore) return
+
+  state.setTaskPage({ loadingMore: true })
+  try {
+    const page = await backendApi.listGenerations(state.settings, {
+      limit: INITIAL_TASK_LIMIT,
+      offset: state.tasks.length,
+    })
+    useStore.getState().appendTasks(page.items)
+    const loaded = useStore.getState().tasks.length
+    useStore.getState().setTaskPage({
+      total: page.total,
+      loaded,
+      hasMore: page.hasMore && loaded < page.total,
+    })
+  } catch (err) {
+    useStore.getState().showToast(`加载更多任务失败：${err instanceof Error ? err.message : String(err)}`, 'error')
+  } finally {
+    useStore.getState().setTaskPage({ loadingMore: false })
+  }
+}
+
+export async function loadMoreServerTemplates() {
+  const state = useStore.getState()
+  if (!state.backendUser || state.templatePage.loadingMore || !state.templatePage.hasMore) return
+
+  state.setTemplatePage({ loadingMore: true })
+  try {
+    const page = await backendApi.listTemplates(state.settings, {
+      limit: INITIAL_TEMPLATE_LIMIT,
+      offset: state.templates.length,
+    })
+    useStore.getState().appendTemplates(page.items)
+    const loaded = useStore.getState().templates.length
+    useStore.getState().setTemplatePage({
+      total: page.total,
+      loaded,
+      hasMore: page.hasMore && loaded < page.total,
+    })
+  } catch (err) {
+    useStore.getState().showToast(`加载更多模板失败：${err instanceof Error ? err.message : String(err)}`, 'error')
+  } finally {
+    useStore.getState().setTemplatePage({ loadingMore: false })
   }
 }
 
@@ -818,7 +939,7 @@ export async function rejectTemplate(templateId: string, reason = '') {
 export async function importOpenPromptLibrary(
   source: backendApi.OpenPromptLibrarySourceId = 'evolink',
   limit = 0,
-  selectedKeys: string[] = [],
+  selectedKeys?: string[],
 ) {
   const { settings, showToast } = useStore.getState()
   const selectedSource = backendApi.OPEN_PROMPT_LIBRARY_SOURCES.find((item) => item.id === source)
@@ -857,6 +978,57 @@ export async function previewSystemBackupFile(file: File): Promise<SystemBackupP
     throw new Error('只有管理员可以预览服务端备份')
   }
   return backendApi.previewSystemBackup(settings, file)
+}
+
+export async function exportData() {
+  try {
+    const { settings, backendUser } = useStore.getState()
+    if (!canManageSystem(backendUser)) {
+      throw new Error('只有管理员可以导出服务端备份')
+    }
+    const blob = await backendApi.exportSystemBackup(settings)
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `gpt-image-playground-backup-${Date.now()}.zip`
+    a.click()
+    URL.revokeObjectURL(url)
+    useStore.getState().showToast('服务端备份已导出', 'success')
+  } catch (e) {
+    useStore
+      .getState()
+      .showToast(
+        `导出失败：${e instanceof Error ? e.message : String(e)}`,
+        'error',
+      )
+  }
+}
+
+export async function importData(file: File) {
+  try {
+    const { settings, backendUser } = useStore.getState()
+    if (!canManageSystem(backendUser)) {
+      throw new Error('只有管理员可以导入服务端备份')
+    }
+    const result = await backendApi.importSystemBackup(settings, file)
+    imageCache.clear()
+    await clearImages()
+    await backendApi.getMe(settings).then((user) => useStore.getState().setBackendUser(user))
+    await syncServerData()
+    useStore.getState().showToast(
+      result.restorePointName
+        ? `服务端备份已导入，已自动创建恢复点 ${result.restorePointName}`
+        : '服务端备份已导入并重新同步',
+      'success',
+    )
+  } catch (e) {
+    useStore
+      .getState()
+      .showToast(
+        `导入失败：${e instanceof Error ? e.message : String(e)}`,
+        'error',
+      )
+  }
 }
 
 export async function testAdminChannelHealth(channelId: string) {

@@ -106,8 +106,8 @@ export interface ApiChannelDraft {
   isEnabled: boolean
 }
 
-export type TemplateVisibility = 'private' | 'public'
-export type TemplateSubmissionStatus = 'draft' | 'submitted' | 'approved' | 'rejected'
+type TemplateVisibility = 'private' | 'public'
+type TemplateSubmissionStatus = 'draft' | 'submitted' | 'approved' | 'rejected'
 
 export interface AuditLog {
   id: string

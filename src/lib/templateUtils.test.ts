@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { DEFAULT_PARAMS } from '../types'
-import type { PromptTemplate } from '../types'
+import type { BackendUser, PromptTemplate } from '../types'
 import {
   ALL_TEMPLATE_CATEGORIES,
   ALL_TEMPLATE_COLLECTIONS,
@@ -11,6 +11,9 @@ import {
   filterTemplates,
   getTemplateCategories,
   getTemplateCollectionCounts,
+  getTemplateCoverFallback,
+  getTemplatePermissions,
+  getTemplateStatusMeta,
   getTemplateTags,
   normalizeTemplateDraft,
   normalizeTemplateTags,
@@ -67,7 +70,85 @@ function template(overrides: Partial<PromptTemplate> = {}): PromptTemplate {
   }
 }
 
+function user(overrides: Partial<BackendUser> = {}): BackendUser {
+  return {
+    id: 'user-a',
+    username: 'alice',
+    role: 'user',
+    createdAt: 1,
+    updatedAt: 1,
+    ...overrides,
+  }
+}
+
 describe('template utilities', () => {
+  it('returns template permissions for owner, public viewer, and admin reviewer cases', () => {
+    expect(getTemplatePermissions(template(), user())).toMatchObject({
+      isOwner: false,
+      isAdmin: false,
+      canFavorite: false,
+      canEdit: false,
+      canDelete: false,
+      canSubmit: false,
+      canReview: false,
+    })
+
+    expect(getTemplatePermissions(template({ userId: 'user-a' }), user())).toMatchObject({
+      isOwner: true,
+      canFavorite: true,
+      canEdit: true,
+      canDelete: true,
+      canSubmit: true,
+      canReview: false,
+    })
+
+    expect(getTemplatePermissions(template({ visibility: 'public', submissionStatus: 'approved' }), user())).toMatchObject({
+      canAdapt: true,
+      canEdit: true,
+      canDelete: false,
+      canSubmit: false,
+    })
+
+    expect(getTemplatePermissions(template({ submissionStatus: 'submitted' }), user({ role: 'admin' }))).toMatchObject({
+      isAdmin: true,
+      canFavorite: true,
+      canReview: true,
+      canEdit: true,
+      canDelete: true,
+    })
+  })
+
+  it('returns template status metadata and cover fallback in a stable order', () => {
+    expect(getTemplateStatusMeta(template({ visibility: 'public', submissionStatus: 'approved' }))).toEqual({
+      kind: 'public',
+      shortLabel: '公共',
+      longLabel: '公共模板',
+    })
+    expect(getTemplateStatusMeta(template({ submissionStatus: 'submitted' }))).toEqual({
+      kind: 'submitted',
+      shortLabel: '待审核',
+      longLabel: '待审核',
+    })
+    expect(getTemplateStatusMeta(template({ submissionStatus: 'rejected' }))).toEqual({
+      kind: 'rejected',
+      shortLabel: '已驳回',
+      longLabel: '已驳回',
+    })
+    expect(getTemplateStatusMeta(template())).toEqual({
+      kind: 'private',
+      shortLabel: '私有',
+      longLabel: '私有模板',
+    })
+
+    expect(getTemplateCoverFallback(template({ externalCoverUrl: 'https://example.test/cover.png', exampleImages: ['https://example.test/fallback.png'] }))).toBe(
+      'https://example.test/cover.png',
+    )
+    expect(getTemplateCoverFallback(template({ externalCoverUrl: null, exampleImages: ['https://example.test/fallback.png'] }))).toBe(
+      'https://example.test/fallback.png',
+    )
+    expect(getTemplateCoverFallback(template())).toBe('')
+  })
+
   it('normalizes template tags and removes duplicates case-insensitively', () => {
     expect(normalizeTemplateTags(' product, Product,  portrait ,, 白底 ')).toEqual([
       'product',

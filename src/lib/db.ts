@@ -71,10 +71,6 @@ export function putTemplate(template: PromptTemplate): Promise<IDBValidKey> {
   return dbTransaction(STORE_TEMPLATES, 'readwrite', (s) => s.put(template))
 }
 
-export function deleteTemplate(id: string): Promise<undefined> {
-  return dbTransaction(STORE_TEMPLATES, 'readwrite', (s) => s.delete(id))
-}
-
 export function clearTemplates(): Promise<undefined> {
   return dbTransaction(STORE_TEMPLATES, 'readwrite', (s) => s.clear())
 }

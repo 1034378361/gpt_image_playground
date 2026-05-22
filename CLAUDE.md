@@ -5,102 +5,102 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Commands
 
 ```bash
+# Install dependencies
+npm install
+pip install -r backend/requirements.txt
+
 # Frontend dev server (proxies /api/* to backend)
 npm run dev
 
 # Backend dev server
-pip install -r backend/requirements.txt
 npm run backend:dev
 
-# Build frontend
+# Type-check / build frontend
+npx tsc -b
 npm run build
+npm run preview
 
-# Frontend tests (vitest)
-npm run test              # single run
-npm run test:watch        # watch mode
-npx vitest run src/lib/mask.test.ts   # single test file
+# Frontend tests (Vitest)
+npm run test
+npm run test:watch
+npx vitest run src/store.test.ts
 
-# Backend tests (pytest)
+# Backend tests (Pytest)
 npm run backend:test
+python -m pytest backend/tests/test_api.py
 
 # E2E tests (Playwright)
 npm run e2e
+npx playwright test e2e/app.spec.ts
 
-# Docker (split frontend/backend)
+# Docker
 docker compose up --build
-
-# Docker (single all-in-one image)
 npm run docker:build:single
+npm run docker:save:single
 ```
 
-### Code Analysis Tools
+### Code analysis tools
 
-When performing refactoring, investigating dead code, assessing complexity, or auditing security, use these tools proactively:
+When refactoring, auditing quality, or checking for dead code/security issues, use these proactively:
 
 ```bash
-# Dead code (Python) — find unused functions/classes/imports
+# Dead code (Python)
 vulture backend/app/ --min-confidence 80
 
-# Dead code + unused deps (TypeScript) — find unused exports, files, dependencies
+# Dead code + unused deps (TypeScript)
 npx knip
 
-# Cyclomatic complexity (Python) — identify functions needing simplification (B+ = review)
+# Cyclomatic complexity / maintainability (Python)
 radon cc backend/app/ -s -n B
-
-# Maintainability index (Python) — per-file score 0-100 (below 20 = hard to maintain)
 radon mi backend/app/ -s -n B
 
-# Circular dependencies (TypeScript) — detect import cycles
+# Circular dependencies (TypeScript)
 madge --circular src/
 
-# Code duplication — find copy-pasted blocks across all languages
+# Duplication
 jscpd src/ --min-lines 5 --reporters console
 jscpd backend/app/ --min-lines 5 --reporters console
 
-# Security scan (Python) — find vulnerability patterns (MEDIUM+ severity)
+# Security / dependency audit
 bandit -r backend/app/ -ll
-
-# Dependency vulnerabilities (npm)
 npm audit
 ```
 
 ## Architecture
 
-This is a multi-user image generation studio with a React SPA frontend and a FastAPI backend. The backend is required — the app does not function as a static site.
+This is a same-origin React SPA plus FastAPI backend for multi-user image generation. The frontend is not a standalone static app anymore: production deployments must provide a working `/api/*` backend on the same origin.
 
-### Frontend (src/)
+### Frontend
 
-- **Framework**: React 19 + Zustand + Tailwind CSS, built with Vite
-- **State**: `store.ts` holds all UI/app state via Zustand with `persist` middleware (IndexedDB). `storeBackend.ts` contains server-sync logic (init, polling, generation dispatch).
-- **API layer**: `src/lib/backendApi.ts` — all `/api/*` calls. The Vite dev server proxies `/api` to the backend at `http://127.0.0.1:8000`.
-- **Local storage**: `src/lib/db.ts` wraps IndexedDB for offline image/task/template caching.
-- **Roles**: Three user roles (`user`, `reviewer`, `admin`) checked via `src/lib/roles.ts`.
-- **Views**: The app switches between task grid, template grid, and project board views via `currentView` in the store.
+- `src/App.tsx` lazy-loads the major views and modals.
+- `src/store.ts` is the main Zustand store for UI state, tasks, templates, images, auth/session state, and selection state.
+- `src/storeBackend.ts` handles bootstrapping from IndexedDB, backend session loading, server sync, generation submission, and refresh/polling behavior.
+- `src/lib/backendApi.ts` is the single fetch layer for `/api/*`; requests are cookie-authenticated.
+- `src/lib/db.ts` stores browser-side tasks, templates, and image blobs in IndexedDB. It is a cache/bootstrap layer, not the source of truth for shared multi-user state.
+- The UI text is primarily zh-CN.
 
-### Backend (backend/app/)
+### Backend
 
-- **Framework**: FastAPI with SQLite (single-file DB at `backend/data/app.sqlite3`)
-- **Entry**: `main.py` — all route handlers in one file
-- **Modules**:
-  - `config.py` — settings from env vars (prefixed `GIP_*`)
-  - `db.py` — SQLite connection/init with schema migrations
-  - `schemas.py` — Pydantic request/response models
-  - `security.py` — bcrypt password hashing, session tokens
-  - `assets.py` — image storage, thumbnails, data-URL conversion
-  - `generation_runtime.py` — async worker queue for image generation tasks
-- **Auth**: Cookie-based sessions. First registered user becomes admin.
-- **Generation**: Backend proxies requests to OpenAI-compatible image APIs via admin-configured "channels" (each channel has its own base URL, API key, timeout, model list).
-- **Data**: All persistent state lives under `backend/data/` (gitignored): SQLite DB, image assets, restore-point archives.
+- `backend/app/main.py` creates the FastAPI app, registers CORS, wires route modules, starts generation workers on lifespan startup, recovers pending tasks, and serves `dist/` as an SPA fallback when a frontend build is present.
+- Route handlers are split under `backend/app/routes/` rather than living in one file: `auth`, `admin`, `assets`, `channels`, `generations`, `projects`, `prompts`, and `templates`.
+- `backend/app/generation_runtime.py` is the async queue/worker runtime for generation tasks.
+- `backend/app/db.py` owns SQLite connection handling and schema initialization.
+- `backend/app/config.py` reads environment variables prefixed with `GIP_*` plus `OPENAI_BASE_URL`.
+- `backend/app/security.py` manages password hashing and cookie-backed sessions.
 
-### Deployment (deploy/)
+### Data model and flows
 
-- Two-container compose: `Dockerfile.backend` (uvicorn) + `Dockerfile.frontend` (nginx + built SPA)
-- Single all-in-one image: `Dockerfile.all-in-one` via `build-single-image.mjs`
-- GitHub Actions publishes to GHCR on version tags
+- Persistent server state lives under `backend/data/`: SQLite database (`app.sqlite3`), generated/uploaded assets, and restore points.
+- Browser IndexedDB caches recent tasks/templates/images for faster startup and local image reuse, but server data is authoritative once the user is logged in.
+- The first registered user becomes admin. Roles are `user`, `reviewer`, and `admin`.
+- Admin-managed channels define upstream base URL, API key, timeout, model list, and compatibility mode. Normal users only choose from enabled channels/models.
+- Generation flow: frontend prepares prompt/images/mask data, submits to backend generation routes, backend enqueues work in `GenerationRuntime`, workers call the configured upstream image API, then results are stored as assets plus task metadata for polling/sync.
+- Templates support private drafts plus reviewed public sharing, and tasks/templates can be grouped into project boards.
 
-## Key Patterns
+### Deployment shape
 
-- The frontend uses lazy-loaded components (`React.lazy`) for all modals and secondary views.
-- Generation tasks flow: frontend submits to `/api/generate` → backend queues in `GenerationRuntime` → workers call upstream API → results stored as assets → frontend polls task status.
-- Backend tests use `monkeypatch` + `tmp_path` to isolate each test with a fresh DB and reimported modules.
-- UI text is in Chinese (zh-CN).
+- Vite dev server proxies `/api` to `http://127.0.0.1:8000` by default; override with `VITE_BACKEND_PROXY_TARGET` if needed.
+- `docker-compose.yml` runs split frontend/backend containers.
+- `docker-compose.single.yml` and `deploy/Dockerfile.all-in-one` support a single-image deployment flow.
+- `vercel.json` only covers the frontend shell; a separate same-origin backend is still required.
+- Because the default persistence layer is SQLite, production/NAS setups should avoid multiple backend instances writing the same `backend/data/` directory.

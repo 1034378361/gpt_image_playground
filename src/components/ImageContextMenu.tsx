@@ -1,5 +1,6 @@
 import React, { useEffect, useState, useRef } from 'react'
-import { useStore, addImageFromUrl, setTemplateCover } from '../store'
+import { useStore, addImageFromUrl } from '../store'
+import { setTemplateCover } from '../storeTemplateActions'
 import { copyBlobToClipboard, getClipboardFailureMessage } from '../lib/clipboard'
 import { copyAssetToSystemClipboard, listSimilarTemplates } from '../lib/backendApi'
 

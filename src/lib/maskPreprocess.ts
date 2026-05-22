@@ -1,8 +1,8 @@
 import type { InputImage } from '../types'
 import { canvasToBlob, loadImage } from './canvasImage'
 
-export const DEFAULT_MASK_WORKING_MAX_EDGE = 1920
-export const MASK_WORKING_DIMENSION_MULTIPLE = 16
+const DEFAULT_MASK_WORKING_MAX_EDGE = 1920
+const MASK_WORKING_DIMENSION_MULTIPLE = 16
 
 export interface MaskWorkingSize {
   width: number

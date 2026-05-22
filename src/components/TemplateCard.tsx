@@ -1,27 +1,19 @@
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import type { PromptTemplate } from '../types'
-import {
-  applyTemplate,
-  duplicateTemplate,
-  ensureImageCached,
-  getCachedImage,
-  removeTemplate,
-  toggleTemplateFavorite,
-  useStore,
-} from '../store'
+import { applyTemplate, useStore } from '../store'
+import { duplicateTemplate, toggleTemplateFavorite } from '../storeTemplateActions'
 import { approveTemplate, rejectTemplate, submitTemplateForReview } from '../storeBackend'
-import { UNASSIGNED_PROJECT_ID } from '../lib/templateUtils'
+import { getTemplateCoverFallback, getTemplatePermissions, getTemplateStatusMeta, UNASSIGNED_PROJECT_ID } from '../lib/templateUtils'
+import { useTemplateActionHelpers } from '../hooks/useTemplateActionHelpers'
+import { useCachedImageMap } from '../hooks/useCachedImageMap'
 
 interface Props {
   template: PromptTemplate
 }
 
 export default function TemplateCard({ template }: Props) {
-  const [coverSrc, setCoverSrc] = useState('')
   const setSelectedTemplateId = useStore((s) => s.setSelectedTemplateId)
   const setTemplateEditor = useStore((s) => s.setTemplateEditor)
-  const setConfirmDialog = useStore((s) => s.setConfirmDialog)
-  const showToast = useStore((s) => s.showToast)
   const backendUser = useStore((s) => s.backendUser)
   const currentProjectId = useStore((s) => s.currentProjectId)
   const selectedTemplateIds = useStore((s) => s.selectedTemplateIds)
@@ -31,58 +23,22 @@ export default function TemplateCard({ template }: Props) {
     s.tasks.filter((task) => task.templateId === template.id || template.linkedTaskIds.includes(task.id)).length,
   )
   const useCount = Math.max(template.usageCount ?? 0, taskCount)
-  const isOwner = backendUser?.id === template.userId
-  const isAdmin = backendUser?.role === 'admin'
-  const canFavorite = Boolean(isOwner || isAdmin)
-  const canManageDirectly = Boolean(isAdmin || (isOwner && template.submissionStatus !== 'submitted' && template.visibility !== 'public' && template.submissionStatus !== 'approved'))
-  const canAdapt = Boolean(template.visibility === 'public' && !isAdmin)
-  const canEdit = canManageDirectly || canAdapt
-  const canDelete = canManageDirectly
-  const canSubmit = Boolean(isOwner && !isAdmin && template.visibility !== 'public' && template.submissionStatus !== 'submitted' && template.submissionStatus !== 'approved')
-  const canReview = Boolean(isAdmin && template.submissionStatus === 'submitted')
+  const { canFavorite, canAdapt, canEdit, canDelete, canSubmit, canReview } = getTemplatePermissions(template, backendUser)
+  const statusMeta = getTemplateStatusMeta(template)
   const ownershipLabel =
     template.visibility === 'public'
       ? '来自公共模板库'
       : template.projectId && template.projectId !== UNASSIGNED_PROJECT_ID
       ? '项目私有模板'
       : '未归类私有模板'
-
-  useEffect(() => {
-    let cancelled = false
-    setCoverSrc(template.externalCoverUrl || template.exampleImages[0] || '')
-    if (!template.coverImageId) return
-
-    const cached = getCachedImage(template.coverImageId)
-    if (cached) {
-      setCoverSrc(cached)
-      return
-    }
-
-    ensureImageCached(template.coverImageId).then((url) => {
-      if (!cancelled && url) setCoverSrc(url)
-    })
-
-    return () => {
-      cancelled = true
-    }
-  }, [template.coverImageId, template.exampleImages, template.externalCoverUrl])
+  const { runTemplateAction, confirmDeleteTemplate } = useTemplateActionHelpers()
+  const imageSrcs = useCachedImageMap([template.coverImageId])
+  const coverSrc = template.coverImageId
+    ? imageSrcs[template.coverImageId] || getTemplateCoverFallback(template)
+    : getTemplateCoverFallback(template)
 
   const handleDelete = () => {
-    setConfirmDialog({
-      title: '删除模板',
-      message: '确定要删除这个模板吗？历史生成记录不会被删除。',
-      action: () => {
-        void removeTemplate(template.id).catch((err) => {
-          showToast(err instanceof Error ? err.message : String(err), 'error')
-        })
-      },
-    })
-  }
-
-  const runTemplateAction = (action: () => Promise<unknown>) => {
-    void action().catch((err) => {
-      showToast(err instanceof Error ? err.message : String(err), 'error')
-    })
+    confirmDeleteTemplate(template.id)
   }
 
   return (
@@ -134,21 +90,15 @@ export default function TemplateCard({ template }: Props) {
               </span>
             )}
             <span className={`rounded-full px-2 py-0.5 text-xs backdrop-blur-sm ${
-              template.visibility === 'public'
+              statusMeta.kind === 'public'
                 ? 'bg-emerald-500/80 text-white'
-                : template.submissionStatus === 'submitted'
+                : statusMeta.kind === 'submitted'
                 ? 'bg-amber-500/80 text-white'
-                : template.submissionStatus === 'rejected'
+                : statusMeta.kind === 'rejected'
                 ? 'bg-rose-500/80 text-white'
                 : 'bg-black/50 text-white'
             }`}>
-              {template.visibility === 'public'
-                ? '公共'
-                : template.submissionStatus === 'submitted'
-                ? '待审核'
-                : template.submissionStatus === 'rejected'
-                ? '已驳回'
-                : '私有'}
+              {statusMeta.shortLabel}
             </span>
             <span className="rounded-full bg-black/50 px-2 py-0.5 text-xs text-white/90 backdrop-blur-sm">
               {useCount} 次

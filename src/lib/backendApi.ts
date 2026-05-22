@@ -27,6 +27,15 @@ import type {
 } from '../types'
 
 export type OpenPromptLibrarySourceId = 'evolink' | 'zerolu' | 'imgedify' | 'youmind' | 'nanobanana'
+export type TemplateListScope = 'all' | 'mine' | 'public' | 'submissions'
+
+export interface PageResult<T> {
+  items: T[]
+  total: number
+  limit: number
+  offset: number
+  hasMore: boolean
+}
 
 export const OPEN_PROMPT_LIBRARY_SOURCES: Array<{
   id: OpenPromptLibrarySourceId
@@ -62,18 +71,6 @@ export const OPEN_PROMPT_LIBRARY_SOURCES: Array<{
 
 function apiBase(): string {
   return '/api'
-}
-
-export function getHealth(): Promise<{ ok: boolean }> {
-  return fetch(`${apiBase()}/health`, {
-    credentials: 'include',
-    headers: { Accept: 'application/json' },
-  }).then(async (response) => {
-    if (!response.ok) {
-      throw new Error(await readError(response))
-    }
-    return response.json() as Promise<{ ok: boolean }>
-  })
 }
 
 async function readError(response: Response): Promise<string> {
@@ -321,12 +318,15 @@ export function importSystemBackup(
   })
 }
 
-export function listTemplates(settings: AppSettings, scope: 'all' | 'mine' | 'public' = 'all'): Promise<PromptTemplate[]> {
-  return request(settings, `/templates?scope=${encodeURIComponent(scope)}`)
-}
-
-export function discoverTemplates(settings: AppSettings, limit = 50): Promise<PromptTemplate[]> {
-  return request(settings, `/templates/discover?limit=${limit}`)
+export function listTemplates(
+  settings: AppSettings,
+  options: { scope?: TemplateListScope; limit?: number; offset?: number } = {},
+): Promise<PageResult<PromptTemplate>> {
+  const params = new URLSearchParams()
+  params.set('scope', options.scope ?? 'all')
+  if (options.limit !== undefined) params.set('limit', String(options.limit))
+  if (options.offset !== undefined) params.set('offset', String(options.offset))
+  return request(settings, `/templates?${params.toString()}`)
 }
 
 export function listTemplateSubmissions(settings: AppSettings): Promise<PromptTemplate[]> {
@@ -376,10 +376,6 @@ export function batchDeleteTemplates(settings: AppSettings, ids: string[]): Prom
 
 export function dedupTemplates(settings: AppSettings): Promise<{ removed: number }> {
   return request(settings, '/admin/templates/dedup', { method: 'POST' })
-}
-
-export function duplicateTemplate(settings: AppSettings, templateId: string): Promise<PromptTemplate> {
-  return request(settings, `/templates/${templateId}/duplicate`, { method: 'POST' })
 }
 
 export function setTemplateCover(settings: AppSettings, templateId: string, imageId: string): Promise<PromptTemplate> {
@@ -461,23 +457,24 @@ export function importOpenPromptLibraryTemplates(
   settings: AppSettings,
   source: OpenPromptLibrarySourceId,
   limit = 0,
-  selectedKeys: string[] = [],
+  selectedKeys?: string[],
 ): Promise<{ ok: boolean; source: string; created: number; updated: number; skipped: number }> {
+  const payload = selectedKeys === undefined ? { source, limit } : { source, limit, selectedKeys }
   return request(settings, `/admin/templates/import-open-library?source=${encodeURIComponent(source)}&limit=${encodeURIComponent(String(limit))}`, {
     method: 'POST',
-    body: JSON.stringify({ source, limit, selectedKeys }),
+    body: JSON.stringify(payload),
   })
 }
 
-export function importEvolinkTemplates(
+export function listGenerations(
   settings: AppSettings,
-  limit = 0,
-): Promise<{ ok: boolean; source: string; created: number; updated: number; skipped: number }> {
-  return importOpenPromptLibraryTemplates(settings, 'evolink', limit)
-}
-
-export function listGenerations(settings: AppSettings): Promise<TaskRecord[]> {
-  return request(settings, '/generations')
+  options: { limit?: number; offset?: number } = {},
+): Promise<PageResult<TaskRecord>> {
+  const params = new URLSearchParams()
+  if (options.limit !== undefined) params.set('limit', String(options.limit))
+  if (options.offset !== undefined) params.set('offset', String(options.offset))
+  const query = params.toString()
+  return request(settings, query ? `/generations?${query}` : '/generations')
 }
 
 export function getGenerationQueueStats(settings: AppSettings): Promise<GenerationQueueStats> {
@@ -591,22 +588,6 @@ export interface BackendGenerateRequest {
   params: TaskRecord['params']
   inputImageDataUrls: string[]
   maskDataUrl?: string
-}
-
-export interface BackendGenerateResponse {
-  task: TaskRecord
-  images: string[]
-  outputAssets: ServerAsset[]
-  actualParams?: Record<string, unknown> | null
-  actualParamsList?: Array<Record<string, unknown> | null> | null
-  revisedPrompts?: Array<string | null> | null
-}
-
-export function generate(settings: AppSettings, payload: BackendGenerateRequest): Promise<BackendGenerateResponse> {
-  return request(settings, '/generate', {
-    method: 'POST',
-    body: JSON.stringify(payload),
-  })
 }
 
 export function runGeneration(settings: AppSettings, payload: BackendGenerateRequest): Promise<{ task: TaskRecord }> {

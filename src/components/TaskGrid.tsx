@@ -1,6 +1,6 @@
 import { useCallback, useMemo, useRef, useState, useEffect } from 'react'
 import { useStore, reuseConfig, editOutputs, removeTask } from '../store'
-import { cancelTask, refreshQueueStats } from '../storeBackend'
+import { cancelTask, loadMoreServerTasks, refreshQueueStats } from '../storeBackend'
 import TaskCard from './TaskCard'
 import GenerationQueueStatus from './GenerationQueueStatus'
 
@@ -10,6 +10,7 @@ export default function TaskGrid() {
   const filterStatus = useStore((s) => s.filterStatus)
   const filterFavorite = useStore((s) => s.filterFavorite)
   const currentProjectId = useStore((s) => s.currentProjectId)
+  const taskPage = useStore((s) => s.taskPage)
   const setDetailTaskId = useStore((s) => s.setDetailTaskId)
   const setConfirmDialog = useStore((s) => s.setConfirmDialog)
   const selectedTaskIds = useStore((s) => s.selectedTaskIds)
@@ -60,9 +61,17 @@ export default function TaskGrid() {
     setVisibleTaskCount(TASK_PAGE_SIZE)
   }, [searchQuery, filterStatus, filterFavorite, currentProjectId])
 
+  const canAutoLoadServerTasks = !searchQuery.trim() && filterStatus === 'all' && !filterFavorite && !currentProjectId
   const loadMoreTasks = useCallback(() => {
-    setVisibleTaskCount((prev) => Math.min(prev + TASK_PAGE_SIZE, filteredTasks.length))
-  }, [filteredTasks.length])
+    if (visibleTaskCount < filteredTasks.length) {
+      setVisibleTaskCount((prev) => Math.min(prev + TASK_PAGE_SIZE, filteredTasks.length))
+      return
+    }
+    if (canAutoLoadServerTasks && taskPage.hasMore && !taskPage.loadingMore) {
+      void loadMoreServerTasks()
+    }
+  }, [canAutoLoadServerTasks, filteredTasks.length, taskPage.hasMore, taskPage.loadingMore, visibleTaskCount])
+  const canLoadMoreTasks = visibleTaskCount < filteredTasks.length || (canAutoLoadServerTasks && taskPage.hasMore)
 
   useEffect(() => {
     const sentinel = taskSentinelRef.current
@@ -271,7 +280,12 @@ export default function TaskGrid() {
           </div>
         ))}
       </div>
-      {visibleTaskCount < filteredTasks.length && <div ref={taskSentinelRef} className="h-10" />}
+      {canLoadMoreTasks && <div ref={taskSentinelRef} className="h-10" />}
+      {(taskPage.total > 0 || taskPage.loadingMore) && (
+        <div className="pb-6 text-center text-xs text-gray-400 dark:text-gray-500">
+          {taskPage.loadingMore ? '正在加载更多任务…' : `已加载 ${Math.min(taskPage.loaded, taskPage.total)} / 共 ${taskPage.total} 条任务`}
+        </div>
+      )}
       {selectionBox && (
         <div
           className="fixed bg-blue-500/20 border border-blue-500/50 pointer-events-none z-[100]"

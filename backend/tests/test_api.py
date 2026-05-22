@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import asyncio
 import base64
 import io
 import importlib
 import json
+import threading
 import time
 import zipfile
 
@@ -367,10 +369,85 @@ def test_template_crud_duplicate_and_generation_link(monkeypatch, tmp_path):
     task = client.post("/api/generations", json=task_payload)
     assert task.status_code == 200
     assert task.json()["templateId"] == template["id"]
-    assert len(client.get("/api/generations").json()) == 1
+    generations = client.get("/api/generations").json()
+    assert generations["total"] == 1
+    assert len(generations["items"]) == 1
 
     deleted = client.delete(f"/api/templates/{template['id']}")
     assert deleted.status_code == 200
+
+
+def test_generation_list_pagination(monkeypatch, tmp_path):
+    client = make_client(monkeypatch, tmp_path)
+    register(client)
+    channel = create_channel(client)
+
+    for index in range(5):
+        response = client.post(
+            "/api/generations",
+            json={
+                "prompt": f"Task {index}",
+                "params": template_payload(channel["id"])["params"],
+                "inputImageIds": [],
+                "outputImages": [],
+                "status": "done",
+                "createdAt": 1000 + index,
+                "channelId": channel["id"],
+                "apiMode": "images",
+                "model": "gpt-image-2",
+            },
+        )
+        assert response.status_code == 200
+
+    first_page = client.get("/api/generations?limit=2&offset=0")
+    assert first_page.status_code == 200
+    first_body = first_page.json()
+    assert first_body["total"] == 5
+    assert first_body["limit"] == 2
+    assert first_body["offset"] == 0
+    assert first_body["hasMore"] is True
+    assert [item["prompt"] for item in first_body["items"]] == ["Task 4", "Task 3"]
+
+    second_body = client.get("/api/generations?limit=2&offset=2").json()
+    assert {item["id"] for item in first_body["items"]}.isdisjoint({item["id"] for item in second_body["items"]})
+    assert [item["prompt"] for item in second_body["items"]] == ["Task 2", "Task 1"]
+
+    assert client.get("/api/generations?limit=0").status_code == 422
+    assert client.get("/api/generations?limit=201").status_code == 422
+    assert client.get("/api/generations?offset=-1").status_code == 422
+
+
+def test_template_list_pagination_and_scope_permissions(monkeypatch, tmp_path):
+    client = make_client(monkeypatch, tmp_path)
+    register(client)
+    channel = create_channel(client)
+
+    for index in range(5):
+        payload = template_payload(channel["id"])
+        payload["title"] = f"Template {index}"
+        response = client.post("/api/templates", json=payload)
+        assert response.status_code == 200
+
+    first_page = client.get("/api/templates?scope=all&limit=2&offset=0")
+    assert first_page.status_code == 200
+    first_body = first_page.json()
+    assert first_body["total"] == 5
+    assert first_body["limit"] == 2
+    assert first_body["offset"] == 0
+    assert first_body["hasMore"] is True
+    assert len(first_body["items"]) == 2
+
+    second_body = client.get("/api/templates?scope=all&limit=2&offset=2").json()
+    assert {item["id"] for item in first_body["items"]}.isdisjoint({item["id"] for item in second_body["items"]})
+    assert client.get("/api/templates?scope=mine&limit=2").json()["total"] == 5
+    assert client.get("/api/templates?scope=public&limit=2").json()["total"] == 5
+
+    client.post("/api/auth/logout")
+    register(client, "bob")
+    assert client.get("/api/templates?scope=submissions").status_code == 403
+    assert client.get("/api/templates?limit=0").status_code == 422
+    assert client.get("/api/templates?limit=201").status_code == 422
+    assert client.get("/api/templates?offset=-1").status_code == 422
 
 
 def test_open_prompt_library_import_sources_and_dedupes(monkeypatch, tmp_path):
@@ -428,14 +505,15 @@ A premium test product on a clean studio background
     assert imported.json()["created"] == 1
 
     templates = client.get("/api/templates?scope=public").json()
-    assert len(templates) == 1
-    assert templates[0]["sourceName"] == "ZeroLu awesome-gpt-image"
-    assert templates[0]["sourceAuthor"] == "@tester"
-    assert templates[0]["licenseName"] == "MIT"
-    assert templates[0]["externalCoverUrl"].endswith("/assets/test-product.jpg")
-    assert templates[0]["exampleImages"][0].endswith("/assets/test-product.jpg")
-    assert templates[0]["recommendedModel"] == "gpt-image-2"
-    assert templates[0]["qualityScore"] > 0
+    assert templates["total"] == 1
+    assert len(templates["items"]) == 1
+    assert templates["items"][0]["sourceName"] == "ZeroLu awesome-gpt-image"
+    assert templates["items"][0]["sourceAuthor"] == "@tester"
+    assert templates["items"][0]["licenseName"] == "MIT"
+    assert templates["items"][0]["externalCoverUrl"].endswith("/assets/test-product.jpg")
+    assert templates["items"][0]["exampleImages"][0].endswith("/assets/test-product.jpg")
+    assert templates["items"][0]["recommendedModel"] == "gpt-image-2"
+    assert templates["items"][0]["qualityScore"] > 0
 
     sources = client.get("/api/admin/open-prompt-sources")
     assert sources.status_code == 200
@@ -456,6 +534,61 @@ A premium test product on a clean studio background
     assert repeated.status_code == 200
     assert repeated.json()["created"] == 0
     assert repeated.json()["skipped"] == 1
+
+
+def test_open_prompt_import_respects_empty_selection_and_omitted_selection(monkeypatch, tmp_path):
+    client = make_client(monkeypatch, tmp_path)
+    register(client)
+    create_channel(client)
+
+    import backend.app.main as main
+
+    readme = """
+### Test Product Ad
+<img width="500" alt="image" src="assets/test-product.jpg" />
+
+**Prompt:**
+```text
+A premium test product on a clean studio background
+```
+**Source:** [@tester](https://x.com/tester/status/1)
+"""
+
+    class FakeAsyncClient:
+        def __init__(self, timeout):
+            self.timeout = timeout
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def get(self, url):
+            request = httpx.Request("GET", url)
+            return httpx.Response(200, text=readme, request=request)
+
+    monkeypatch.setattr(main.httpx, "AsyncClient", FakeAsyncClient)
+
+    empty_import = client.post(
+        "/api/admin/templates/import-open-library",
+        json={"source": "zerolu", "limit": 1, "selectedKeys": []},
+    )
+    assert empty_import.status_code == 200
+    assert empty_import.json()["created"] == 0
+    empty_templates = client.get("/api/templates?scope=public").json()
+    assert empty_templates["items"] == []
+    assert empty_templates["total"] == 0
+
+    imported = client.post(
+        "/api/admin/templates/import-open-library",
+        json={"source": "zerolu", "limit": 1},
+    )
+    assert imported.status_code == 200
+    assert imported.json()["created"] == 1
+    templates = client.get("/api/templates?scope=public").json()
+    assert templates["total"] == 1
+    assert len(templates["items"]) == 1
 
 
 def test_asset_upload_read_delete(monkeypatch, tmp_path):
@@ -610,10 +743,12 @@ def test_admin_can_export_and_import_server_backup(monkeypatch, tmp_path):
     assert exported.status_code == 200
     assert exported.headers["content-type"].startswith("application/zip")
 
-    archive = zipfile.ZipFile(io.BytesIO(exported.content))
-    manifest = json.loads(archive.read("server-backup.json").decode("utf-8"))
+    with zipfile.ZipFile(io.BytesIO(exported.content)) as archive:
+        manifest = json.loads(archive.read("server-backup.json").decode("utf-8"))
     assert manifest["tables"]["users"][0]["username"] == "alice"
     assert asset["id"] in manifest["imageFiles"]
+    assert manifest["imageFiles"][asset["id"]]["path"].endswith(f"{asset['id']}.png")
+    assert manifest["imageFiles"][asset["id"]]["thumbnailPath"].endswith(f"{asset['id']}.thumb.webp")
 
     preview = client.post(
         "/api/admin/system/import-preview",
@@ -639,7 +774,46 @@ def test_admin_can_export_and_import_server_backup(monkeypatch, tmp_path):
     assert client.get("/api/auth/me").status_code == 200
 
     templates = client.get("/api/templates").json()
-    assert any(item["id"] == template["id"] for item in templates)
+    assert any(item["id"] == template["id"] for item in templates["items"])
+    restored_asset = client.get(f"/api/assets/{asset['id']}")
+    assert restored_asset.status_code == 200
+    assert restored_asset.content == PIXEL_PNG
+
+
+def test_failed_backup_import_keeps_existing_assets(monkeypatch, tmp_path):
+    client = make_client(monkeypatch, tmp_path)
+
+    register(client)
+    create_channel(client)
+
+    upload = client.post(
+        "/api/assets",
+        files={"file": ("pixel.png", PIXEL_PNG, "image/png")},
+        data={"type": "generated"},
+    )
+    assert upload.status_code == 200
+    asset = upload.json()
+
+    exported = client.get("/api/admin/system/export")
+    assert exported.status_code == 200
+
+    with zipfile.ZipFile(io.BytesIO(exported.content)) as source_archive:
+        manifest = json.loads(source_archive.read("server-backup.json").decode("utf-8"))
+        missing_asset_path = manifest["imageFiles"][asset["id"]]["path"]
+
+        broken_buffer = io.BytesIO()
+        with zipfile.ZipFile(broken_buffer, mode="w", compression=zipfile.ZIP_DEFLATED) as broken_archive:
+            for name in source_archive.namelist():
+                if name == missing_asset_path:
+                    continue
+                broken_archive.writestr(name, source_archive.read(name))
+
+    imported = client.post(
+        "/api/admin/system/import",
+        files={"file": ("backup.zip", broken_buffer.getvalue(), "application/zip")},
+    )
+    assert imported.status_code == 400
+
     restored_asset = client.get(f"/api/assets/{asset['id']}")
     assert restored_asset.status_code == 200
     assert restored_asset.content == PIXEL_PNG
@@ -647,7 +821,6 @@ def test_admin_can_export_and_import_server_backup(monkeypatch, tmp_path):
 
 def test_generation_queue_stats_counts_user_and_global(monkeypatch, tmp_path):
     client = make_client(monkeypatch, tmp_path)
-
     register(client)
     channel = create_channel(client)
     payload = template_payload(channel["id"])["params"]
@@ -1000,6 +1173,85 @@ def test_generation_diagnostics_surface_connection_reset(monkeypatch, tmp_path):
     assert "10054" in error_message
 
 
+def test_upstream_no_image_reason_for_responses_output_summary(monkeypatch, tmp_path):
+    make_client(monkeypatch, tmp_path)
+    from backend.app.routes.generations import upstream_no_image_reason
+
+    reason = upstream_no_image_reason(
+        {
+            "output": [
+                {
+                    "type": "image_generation_call",
+                    "status": "completed",
+                    "result": None,
+                    "message": "blocked upstream",
+                }
+            ]
+        },
+        "responses",
+    )
+
+    assert "responses 未返回 image_generation_call.result" in reason
+    assert "status=completed" in reason
+    assert "message=blocked upstream" in reason
+
+
+def test_upstream_no_image_reason_for_images_output_summary(monkeypatch, tmp_path):
+    make_client(monkeypatch, tmp_path)
+    from backend.app.routes.generations import upstream_no_image_reason
+
+    reason = upstream_no_image_reason(
+        {
+            "data": [
+                {
+                    "revised_prompt": "refined prompt",
+                    "message": "no image payload",
+                }
+            ]
+        },
+        "images",
+    )
+
+    assert "images data 中没有 b64_json/url" in reason
+    assert "字段=message,revised_prompt" in reason
+    assert "refined prompt" in reason or "no image payload" in reason
+
+
+    client = make_client(monkeypatch, tmp_path)
+    import backend.app.routes.generations as generations
+
+    user = register(client)
+    channel = create_channel(client)
+    old_created_at = 1_700_000_000_000
+
+    created = client.post(
+        "/api/generations",
+        json={
+            "prompt": "queued task",
+            "params": template_payload(channel["id"])["params"],
+            "inputImageIds": [],
+            "outputImages": [],
+            "status": "queued",
+            "createdAt": old_created_at,
+            "channelId": channel["id"],
+            "apiMode": "images",
+            "model": "gpt-image-2",
+        },
+    )
+    assert created.status_code == 200
+    task_id = created.json()["id"]
+
+    execution = generations.prepare_generation_execution(task_id)
+    assert execution is not None
+    assert execution.user_id == user["id"]
+    assert execution.started_at >= old_created_at
+    assert execution.started_at != old_created_at
+
+    task = client.get(f"/api/generations/{task_id}")
+    assert task.status_code == 200
+    assert task.json()["status"] == "running"
+
+
 def test_queued_generation_can_be_canceled(monkeypatch, tmp_path):
     client = make_client(monkeypatch, tmp_path)
     import backend.app.main as main
@@ -1027,6 +1279,52 @@ def test_queued_generation_can_be_canceled(monkeypatch, tmp_path):
 
     logs = client.get("/api/admin/audit-logs").json()
     assert any(item["action"] == "generation.cancel" for item in logs)
+
+
+def test_running_generation_canceled_without_task_cancel_stays_canceled(monkeypatch, tmp_path):
+    client = make_client(monkeypatch, tmp_path)
+    import backend.app.main as main
+
+    register(client)
+    channel = create_channel(client)
+
+    release_upstream = threading.Event()
+
+    async def fake_call_upstream(_payload):
+        while not release_upstream.is_set():
+            await asyncio.sleep(0.01)
+        return ([PIXEL_DATA_URL], {"size": "1024x1024"}, [{"size": "1024x1024"}], ["revised"])
+
+    monkeypatch.setattr("backend.app.routes.generations.call_upstream", fake_call_upstream)
+    monkeypatch.setattr(main._state.GENERATION_RUNTIME, "cancel_active", lambda _task_id: None)
+
+    payload = {
+        "channelId": channel["id"],
+        "model": "gpt-image-2",
+        "prompt": "A bottle on a clean white background",
+        "params": template_payload(channel["id"])["params"],
+        "inputImageDataUrls": [],
+        "maskDataUrl": None,
+    }
+    started = client.post("/api/generations/run", json=payload)
+    assert started.status_code == 200
+    task_id = started.json()["task"]["id"]
+
+    deadline = time.time() + 3
+    task = client.get(f"/api/generations/{task_id}").json()
+    while task["status"] == "queued" and time.time() < deadline:
+        time.sleep(0.05)
+        task = client.get(f"/api/generations/{task_id}").json()
+    assert task["status"] == "running"
+
+    canceled = client.post(f"/api/generations/{task_id}/cancel")
+    assert canceled.status_code == 200
+    assert canceled.json()["status"] == "canceled"
+
+    release_upstream.set()
+    final_task = wait_for_task(client, task_id)
+    assert final_task["status"] == "canceled"
+    assert final_task["error"] == "已取消"
 
 
 def test_user_template_submission_can_be_approved_to_public(monkeypatch, tmp_path):
