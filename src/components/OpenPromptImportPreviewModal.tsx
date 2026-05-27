@@ -19,6 +19,9 @@ interface Props {
 type DuplicateFilter = 'new' | 'all' | 'duplicate'
 type QualityFilter = 'all' | 'high' | 'solid'
 
+const ALL_IMPORT_CATEGORIES = '__all__'
+const ALL_IMPORT_TAGS = '__all__'
+
 export default function OpenPromptImportPreviewModal({ open, source, onClose, limit = 0 }: Props) {
   const settings = useStore((s) => s.settings)
   const showToast = useStore((s) => s.showToast)
@@ -27,6 +30,8 @@ export default function OpenPromptImportPreviewModal({ open, source, onClose, li
   const [query, setQuery] = useState('')
   const [duplicateFilter, setDuplicateFilter] = useState<DuplicateFilter>('new')
   const [qualityFilter, setQualityFilter] = useState<QualityFilter>('all')
+  const [categoryFilter, setCategoryFilter] = useState(ALL_IMPORT_CATEGORIES)
+  const [tagFilter, setTagFilter] = useState(ALL_IMPORT_TAGS)
   const [loading, setLoading] = useState(false)
   const [importing, setImporting] = useState(false)
   const [error, setError] = useState('')
@@ -40,6 +45,8 @@ export default function OpenPromptImportPreviewModal({ open, source, onClose, li
     setError('')
     setPreview(null)
     setSelectedKeys(new Set())
+    setCategoryFilter(ALL_IMPORT_CATEGORIES)
+    setTagFilter(ALL_IMPORT_TAGS)
     void previewOpenPromptLibraryTemplates(settings, source, limit)
       .then((result) => {
         if (cancelled) return
@@ -58,6 +65,34 @@ export default function OpenPromptImportPreviewModal({ open, source, onClose, li
     }
   }, [limit, open, settings, source])
 
+  const categoryOptions = useMemo(() => {
+    const categories = new Set(
+      (preview?.items ?? [])
+        .map((item) => item.category.trim())
+        .filter(Boolean),
+    )
+    return [
+      { label: '全部分类', value: ALL_IMPORT_CATEGORIES },
+      ...[...categories]
+        .sort((a, b) => a.localeCompare(b, 'zh-CN'))
+        .map((value) => ({ label: value, value })),
+    ]
+  }, [preview?.items])
+
+  const tagOptions = useMemo(() => {
+    const tags = new Set(
+      (preview?.items ?? [])
+        .flatMap((item) => item.tags.map((tag) => tag.trim()))
+        .filter(Boolean),
+    )
+    return [
+      { label: '全部标签', value: ALL_IMPORT_TAGS },
+      ...[...tags]
+        .sort((a, b) => a.localeCompare(b, 'zh-CN'))
+        .map((value) => ({ label: value, value })),
+    ]
+  }, [preview?.items])
+
   const visibleItems = useMemo(() => {
     const normalizedQuery = query.trim().toLowerCase()
     return (preview?.items ?? []).filter((item) => {
@@ -65,6 +100,8 @@ export default function OpenPromptImportPreviewModal({ open, source, onClose, li
       if (duplicateFilter === 'duplicate' && !item.isDuplicate) return false
       if (qualityFilter === 'high' && item.qualityScore < 70) return false
       if (qualityFilter === 'solid' && item.qualityScore < 50) return false
+      if (categoryFilter !== ALL_IMPORT_CATEGORIES && item.category.trim() !== categoryFilter) return false
+      if (tagFilter !== ALL_IMPORT_TAGS && !item.tags.some((tag) => tag.trim() === tagFilter)) return false
       if (!normalizedQuery) return true
       const searchable = [
         item.title,
@@ -75,7 +112,7 @@ export default function OpenPromptImportPreviewModal({ open, source, onClose, li
       ].join(' ').toLowerCase()
       return searchable.includes(normalizedQuery)
     })
-  }, [duplicateFilter, preview?.items, qualityFilter, query])
+  }, [categoryFilter, duplicateFilter, preview?.items, qualityFilter, query, tagFilter])
 
   if (!open) return null
 
@@ -155,44 +192,60 @@ export default function OpenPromptImportPreviewModal({ open, source, onClose, li
           </button>
         </div>
 
-        <div className="mb-3 grid gap-2 md:grid-cols-[1fr_9rem_9rem_auto]">
-          <div className="relative">
-            <svg
-              className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400 dark:text-gray-500"
-              fill="none"
-              stroke="currentColor"
-              viewBox="0 0 24 24"
-            >
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-            </svg>
-            <input
-              value={query}
-              onChange={(event) => setQuery(event.target.value)}
-              placeholder="按标题、提示词、标签、作者筛选"
-              className="w-full rounded-xl border border-gray-200 bg-white py-2.5 pl-10 pr-3 text-sm outline-none transition focus:border-blue-400 focus:ring-2 focus:ring-blue-500/20 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200"
-            />
+        <div className="mb-3 flex flex-col gap-2">
+          <div className="flex flex-col gap-2 lg:flex-row">
+            <div className="relative min-w-0 flex-1">
+              <svg
+                className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400 dark:text-gray-500"
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+              >
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+              </svg>
+              <input
+                value={query}
+                onChange={(event) => setQuery(event.target.value)}
+                placeholder="按标题、提示词、分类、标签、作者筛选"
+                className="w-full rounded-xl border border-gray-200 bg-white py-2.5 pl-10 pr-3 text-sm outline-none transition focus:border-blue-400 focus:ring-2 focus:ring-blue-500/20 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200"
+              />
+            </div>
+            <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 lg:w-[36rem]">
+              <Select
+                value={duplicateFilter}
+                onChange={(value) => setDuplicateFilter(value as DuplicateFilter)}
+                options={[
+                  { label: '仅新模板', value: 'new' },
+                  { label: '全部模板', value: 'all' },
+                  { label: '仅重复项', value: 'duplicate' },
+                ]}
+                className="rounded-xl border border-gray-200 bg-white px-3 py-2.5 text-sm dark:border-white/[0.08] dark:bg-white/[0.03]"
+              />
+              <Select
+                value={qualityFilter}
+                onChange={(value) => setQualityFilter(value as QualityFilter)}
+                options={[
+                  { label: '全部质量', value: 'all' },
+                  { label: '70+ 高分', value: 'high' },
+                  { label: '50+ 可用', value: 'solid' },
+                ]}
+                className="rounded-xl border border-gray-200 bg-white px-3 py-2.5 text-sm dark:border-white/[0.08] dark:bg-white/[0.03]"
+              />
+              <Select
+                value={categoryFilter}
+                onChange={setCategoryFilter}
+                options={categoryOptions}
+                className="rounded-xl border border-gray-200 bg-white px-3 py-2.5 text-sm dark:border-white/[0.08] dark:bg-white/[0.03]"
+              />
+              <Select
+                value={tagFilter}
+                onChange={setTagFilter}
+                options={tagOptions}
+                className="rounded-xl border border-gray-200 bg-white px-3 py-2.5 text-sm dark:border-white/[0.08] dark:bg-white/[0.03]"
+              />
+            </div>
           </div>
-          <Select
-            value={duplicateFilter}
-            onChange={(value) => setDuplicateFilter(value as DuplicateFilter)}
-            options={[
-              { label: '仅新模板', value: 'new' },
-              { label: '全部模板', value: 'all' },
-              { label: '仅重复项', value: 'duplicate' },
-            ]}
-            className="rounded-xl border border-gray-200 bg-white px-3 py-2.5 text-sm dark:border-white/[0.08] dark:bg-white/[0.03]"
-          />
-          <Select
-            value={qualityFilter}
-            onChange={(value) => setQualityFilter(value as QualityFilter)}
-            options={[
-              { label: '全部质量', value: 'all' },
-              { label: '70+ 高分', value: 'high' },
-              { label: '50+ 可用', value: 'solid' },
-            ]}
-            className="rounded-xl border border-gray-200 bg-white px-3 py-2.5 text-sm dark:border-white/[0.08] dark:bg-white/[0.03]"
-          />
-          <div className="flex gap-2">
+          <div className="flex flex-wrap gap-2">
             <button
               type="button"
               disabled={!visibleItems.length}

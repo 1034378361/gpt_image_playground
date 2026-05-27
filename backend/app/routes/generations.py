@@ -1081,11 +1081,12 @@ def map_revised_prompts_by_image(output_ids: list[str], revised_prompts: list[st
 def record_template_generation_result(template_id: str | None, success: bool) -> None:
     if not template_id:
         return
+    counter_column = "success_count" if success else "failure_count"
     with get_conn() as conn:
         conn.execute(
             f"""
             UPDATE prompt_templates
-            SET {'success_count' if success else 'failure_count'} = COALESCE({'success_count' if success else 'failure_count'}, 0) + 1,
+            SET {counter_column} = COALESCE({counter_column}, 0) + 1,
                 updated_at = CASE WHEN visibility = 'private' THEN ? ELSE updated_at END
             WHERE id = ?
             """,
@@ -1299,9 +1300,9 @@ def _patch_generation(task_id: str, payload: GenerationTaskPatch, user: UserOut)
         return existing
     next_task = GenerationTaskOut.model_validate({**existing.model_dump(), **data})
     project_id = resolve_owned_project_id(next_task.projectId, user)
-    status_guard = ""
+    final_status_guard_sql = ""
     if "status" in data and data["status"] in FINAL_TASK_STATUSES:
-        status_guard = " AND status NOT IN ('done', 'error', 'canceled')"
+        final_status_guard_sql = " AND status NOT IN ('done', 'error', 'canceled')"
     with get_conn() as conn:
         conn.execute(
             f"""
@@ -1311,7 +1312,7 @@ def _patch_generation(task_id: str, payload: GenerationTaskPatch, user: UserOut)
               actual_params_json = ?, actual_params_by_image_json = ?, revised_prompt_by_image_json = ?,
               status = ?, error = ?, finished_at = ?, elapsed = ?, is_favorite = ?, diagnostics_json = ?,
               channel_id = ?, api_mode = ?, model = ?
-            WHERE id = ? AND user_id = ?{status_guard}
+            WHERE id = ? AND user_id = ?{final_status_guard_sql}
             """,
             (
                 next_task.templateId,

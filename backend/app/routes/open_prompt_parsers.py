@@ -52,8 +52,6 @@ def _source_author_from_links(links: list[tuple[str, str]]) -> str:
     label = next((label for label, _ in links if label.strip().startswith("@")), links[-1][0])
     return re.sub(r"\s+", " ", label).strip()
 
-
-
 IMAGE_PROMPT_POSITIVE_TERMS = (
     "image", "photo", "photography", "photorealistic", "render", "poster", "portrait",
     "product", "scene", "lighting", "composition", "background", "illustration", "cinematic",
@@ -262,15 +260,22 @@ def _parse_zerolu_prompt_readme(source: OpenPromptSource, markdown: str) -> list
         source_url = links[0][1] if links else source.repo_url
         source_author = _source_author_from_links(links)
         prompt = prompt_match.group("prompt").strip()
+        image = _extract_prompt_image(source, body)
+        category = _infer_template_category("gpt image", title)
+        tags = _infer_template_tags("gpt image", title, prompt)
+        if not _looks_like_image_generation_prompt(
+            title, prompt, image=image, tags=tags, category=category, body=body,
+        ):
+            continue
         items.append(
             {
                 "title": title,
                 "prompt": prompt[:4000],
-                "image": _extract_prompt_image(source, body),
+                "image": image,
                 "sourceUrl": source_url,
                 "sourceAuthor": source_author,
-                "category": _infer_template_category("gpt image", title),
-                "tags": _infer_template_tags("gpt image", title, prompt),
+                "category": category,
+                "tags": tags,
             }
         )
     return items

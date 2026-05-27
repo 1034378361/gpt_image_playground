@@ -2,9 +2,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { DEFAULT_PARAMS, DEFAULT_SETTINGS } from './types'
 import type { TaskRecord } from './types'
 import { imageCache, useStore } from './store'
-import { importData, loadMoreServerTasks, loadMoreServerTemplates, syncServerData, retryTask, cancelMultipleTasks } from './storeBackend'
+import { importData, loadMoreServerTasks, loadMoreServerTemplates, syncServerData, retryTask, cancelMultipleTasks, submitTask, submitTaskMatrix, generateVariation } from './storeBackend'
 import * as backendApi from './lib/backendApi'
-import { clearImages } from './lib/db'
+import { clearImages, storeImage } from './lib/db'
 
 vi.mock('./lib/backendApi', () => ({
   getMe: vi.fn(),
@@ -43,6 +43,10 @@ vi.mock('./lib/db', () => ({
 
 const mockedBackendApi = vi.mocked(backendApi)
 const mockedClearImages = vi.mocked(clearImages)
+const mockedStoreImage = vi.mocked(storeImage)
+
+const imageA = { id: 'image-a', dataUrl: 'data:image/png;base64,a' }
+const imageB = { id: 'image-b', dataUrl: 'data:image/png;base64,b' }
 
 function pageResult<T>(items: T[], options: { total?: number; limit?: number; offset?: number; hasMore?: boolean } = {}) {
   return {
@@ -207,6 +211,7 @@ describe('storeBackend state flows', () => {
     })
     mockedBackendApi.getAssetDataUrl.mockResolvedValue('data:image/png;base64,a')
     mockedClearImages.mockResolvedValue(undefined)
+    mockedStoreImage.mockResolvedValue('stored-image')
   })
 
   it('syncServerData clears stale currentProjectId', async () => {
@@ -352,6 +357,90 @@ describe('storeBackend state flows', () => {
       running.id,
     ].sort())
     expect(useStore.getState().toast).toMatchObject({ message: '已取消 2 个任务', type: 'success' })
+  })
+
+  it('submitTask keeps composer state and remix lineage in keep_all mode', async () => {
+    imageCache.set(imageA.id, imageA.dataUrl)
+    useStore.setState({
+      prompt: 'remix prompt',
+      inputImages: [imageA],
+      pendingParentTaskId: 'parent-task',
+      generationPreflight: { ok: true, predictedApiMode: 'images', codexCli: false, normalizedParams: { ...DEFAULT_PARAMS }, diagnostics: [] },
+      composerClearMode: 'keep_all',
+    })
+
+    const queued = await submitTask()
+
+    expect(queued).toMatchObject({ prompt: 'remix prompt', inputImageIds: [imageA.id], parentTaskId: 'parent-task' })
+    expect(useStore.getState().prompt).toBe('remix prompt')
+    expect(useStore.getState().inputImages).toEqual([imageA])
+    expect(useStore.getState().pendingParentTaskId).toBe('parent-task')
+    expect(useStore.getState().generationPreflight).toBeNull()
+  })
+
+  it('submitTask clears prompt and lineage but keeps images in prompt_only mode', async () => {
+    imageCache.set(imageA.id, imageA.dataUrl)
+    useStore.setState({
+      prompt: 'remix prompt',
+      inputImages: [imageA],
+      pendingParentTaskId: 'parent-task',
+      composerClearMode: 'prompt_only',
+    })
+
+    await submitTask()
+
+    expect(useStore.getState().prompt).toBe('')
+    expect(useStore.getState().inputImages).toEqual([imageA])
+    expect(useStore.getState().pendingParentTaskId).toBeNull()
+  })
+
+  it('submitTask clears prompt images mask and lineage in prompt_and_images mode', async () => {
+    imageCache.set(imageA.id, imageA.dataUrl)
+    useStore.setState({
+      prompt: 'remix prompt',
+      inputImages: [imageA],
+      pendingParentTaskId: 'parent-task',
+      composerClearMode: 'prompt_and_images',
+    })
+
+    await submitTask()
+
+    expect(useStore.getState().prompt).toBe('')
+    expect(useStore.getState().inputImages).toEqual([])
+    expect(useStore.getState().maskDraft).toBeNull()
+    expect(useStore.getState().pendingParentTaskId).toBeNull()
+  })
+
+  it('submitTaskMatrix keeps lineage in keep_all mode and queues child tasks', async () => {
+    useStore.setState({
+      prompt: 'matrix prompt',
+      pendingParentTaskId: 'parent-task',
+      composerClearMode: 'keep_all',
+    })
+
+    await submitTaskMatrix([
+      { channelId: 'channel-a', model: 'model-a', apiMode: 'images', variationLabel: 'A' },
+      { channelId: 'channel-a', model: 'model-b', apiMode: 'images', variationLabel: 'B' },
+    ])
+
+    expect(useStore.getState().pendingParentTaskId).toBe('parent-task')
+    expect(useStore.getState().tasks).toHaveLength(2)
+    expect(useStore.getState().tasks.map((item) => item.parentTaskId)).toEqual(['parent-task', 'parent-task'])
+  })
+
+  it('generateVariation queues a child task from the selected output image', async () => {
+    imageCache.set(imageB.id, imageB.dataUrl)
+    const sourceTask = task({ id: 'source-task', prompt: 'source prompt', projectId: 'project-a', outputImages: [imageB.id] })
+
+    const queued = await generateVariation(sourceTask, imageB.id)
+
+    expect(queued).toMatchObject({
+      prompt: 'source prompt',
+      inputImageIds: [imageB.id],
+      parentTaskId: 'source-task',
+      projectId: 'project-a',
+    })
+    expect(useStore.getState().toast).toMatchObject({ message: '已提交变体生成', type: 'success' })
   })
 
   it('importData rejects non-admin users before backend calls', async () => {

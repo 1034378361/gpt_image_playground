@@ -429,7 +429,7 @@ def patch_channel(channel_id: str, payload: ApiChannelPatch, admin: UserOut = De
     current = row_to_admin_channel(row)
     next_name = (payload.name if payload.name is not None else current.name).strip()
     next_base_url = normalize_base_url(payload.baseUrl if payload.baseUrl is not None else current.baseUrl)
-    next_api_key = payload.apiKey.strip() if payload.apiKey is not None else row["api_key"]
+    next_api_key = payload.apiKey.strip() if payload.apiKey is not None and payload.apiKey.strip() else row["api_key"]
     next_models = normalize_channel_models(payload.models if payload.models is not None else current.models)
     next_timeout_seconds = max(
         10,

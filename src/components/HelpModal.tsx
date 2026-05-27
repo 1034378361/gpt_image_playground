@@ -150,13 +150,23 @@ export default function HelpModal({ onClose }: HelpModalProps) {
 
         <div className="flex-1 overflow-y-auto mb-6 text-sm text-gray-600 dark:text-gray-300 space-y-6 custom-scrollbar pr-2">
           <section className="rounded-2xl border border-blue-100 bg-blue-50/70 px-4 py-3 text-sm text-blue-700 dark:border-blue-500/20 dark:bg-blue-500/10 dark:text-blue-200">
-            当前为独立维护版 <span className="font-mono font-semibold">v{__APP_VERSION__}</span>。此版本已切换为后端统一登录、统一渠道配置、模板审核与项目化管理，不再沿用原始的前端直连模式。
+            <p>
+              当前为独立维护项目 <span className="font-mono font-semibold">v{__APP_VERSION__}</span>，发布、问题反馈和部署文档以当前维护仓库为准。
+            </p>
+            <p className="mt-2 text-blue-600/90 dark:text-blue-200/80">
+              项目参考了 CookSleep/gpt_image_playground 的早期实现思路；当前版本已演进为后端统一登录、统一渠道配置、模板审核、项目化管理和服务端队列的独立版本。
+            </p>
           </section>
           {(isMobile ? MOBILE_SECTIONS : DESKTOP_SECTIONS).map(renderSection)}
         </div>
 
-        <div className="pt-4 border-t border-gray-200 dark:border-white/[0.08] space-y-2 text-center">
-          <p className="text-xs font-mono text-gray-400 dark:text-gray-500">Version v{__APP_VERSION__} · 1.x 独立版</p>
+        <div className="pt-4 border-t border-gray-200 dark:border-white/[0.08] space-y-3 text-center">
+          <div className="space-y-1">
+            <p className="text-xs font-mono text-gray-400 dark:text-gray-500">Version v{__APP_VERSION__} · 独立维护版</p>
+            <p className="text-xs text-gray-400 dark:text-gray-500">
+              当前仓库用于版本发布、问题反馈和后续维护；上游仓库仅作为项目参考来源。
+            </p>
+          </div>
           <div className="flex flex-wrap items-center justify-center gap-x-4 gap-y-2 text-sm">
             <a
               href={CURRENT_REPO_URL}
@@ -175,7 +185,7 @@ export default function HelpModal({ onClose }: HelpModalProps) {
               rel="noopener noreferrer"
               className="text-sm text-gray-400 transition-colors hover:text-gray-700 dark:text-gray-500 dark:hover:text-gray-300"
             >
-              上游来源：CookSleep
+              参考上游项目
             </a>
           </div>
         </div>

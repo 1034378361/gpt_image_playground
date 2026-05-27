@@ -340,7 +340,6 @@ function clearComposerAfterTaskQueued() {
 
   if (mode === 'keep_all') {
     state.setGenerationPreflight(null)
-    state.setPendingParentTaskId(null)
     return
   }
 
@@ -1007,10 +1006,15 @@ export async function importOpenPromptLibrary(
   await syncServerData()
 }
 
+function channelPatchPayload(payload: ApiChannelDraft): Partial<ApiChannelDraft> {
+  const { apiKey, ...payloadWithoutApiKey } = payload
+  return apiKey.trim() ? payload : payloadWithoutApiKey
+}
+
 export async function saveAdminChannel(channelId: string | null, payload: ApiChannelDraft) {
   const { settings, adminChannels, showToast } = useStore.getState()
   const saved = channelId
-    ? await backendApi.patchChannel(settings, channelId, payload)
+    ? await backendApi.patchChannel(settings, channelId, channelPatchPayload(payload))
     : await backendApi.createChannel(settings, payload)
   const nextChannels = channelId
     ? adminChannels.map((channel) => (channel.id === channelId ? saved : channel))

@@ -1,5 +1,24 @@
 # Changelog
 
+## 1.6.1 - 2026-05-27
+
+### Added
+- Add category and tag filters to the Open Prompt import preview.
+- Add task retry, batch cancellation, and batch project-move workflow refinements.
+
+### Changed
+- Improve Open Prompt import quality scoring so realistic prompts can reach the 70+ quality filter.
+- Make edit-output and reuse-config composer behavior refresh Remix lineage and replace references predictably.
+- Clarify the operation guide with the independently maintained repository and upstream reference.
+- Show generated task creation time on image cards instead of duplicate size metadata.
+
+### Fixed
+- Preserve existing API keys when editing channels with a blank API Key field.
+- Preserve Remix lineage when queueing with the `keep_all` composer clear mode.
+- Treat VPS/browser clipboard fallback success as a successful copy instead of an error.
+- Reject code/documentation-like Open Prompt sections during import preview.
+- Reduce safe dynamic-SQL and dead-code scanner noise.
+
 ## 1.6.0 - 2026-05-27
 
 ### Added

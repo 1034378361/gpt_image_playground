@@ -29,7 +29,6 @@ export default function TaskCard({
 }: Props) {
   const [thumbSrc, setThumbSrc] = useState<string>('')
   const [coverRatio, setCoverRatio] = useState<string>('')
-  const [coverSize, setCoverSize] = useState<string>('')
   const [now, setNow] = useState(Date.now())
   const [swipeOffset, setSwipeOffset] = useState(0)
   const [isSwiping, setIsSwiping] = useState(false)
@@ -122,7 +121,6 @@ export default function TaskCard({
   useEffect(() => {
     let cancelled = false
     setCoverRatio('')
-    setCoverSize('')
     setThumbSrc('')
 
     if (!firstOutputImageId) return
@@ -149,13 +147,11 @@ export default function TaskCard({
     image.onload = () => {
       if (!cancelled && image.naturalWidth > 0 && image.naturalHeight > 0) {
         setCoverRatio(formatImageRatio(image.naturalWidth, image.naturalHeight))
-        setCoverSize(`${image.naturalWidth}×${image.naturalHeight}`)
       }
     }
     image.src = thumbSrc
     if (image.complete && image.naturalWidth > 0 && image.naturalHeight > 0) {
       setCoverRatio(formatImageRatio(image.naturalWidth, image.naturalHeight))
-      setCoverSize(`${image.naturalWidth}×${image.naturalHeight}`)
     }
 
     return () => {
@@ -176,6 +172,12 @@ export default function TaskCard({
     const ss = String(seconds % 60).padStart(2, '0')
     return `${mm}:${ss}`
   })()
+  const createdTime = new Date(task.createdAt).toLocaleString('zh-CN', {
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  })
   const aggregateActualParams = task.outputImages?.length
     ? { ...task.actualParams, n: task.outputImages.length }
     : task.actualParams
@@ -344,9 +346,9 @@ export default function TaskCard({
               />
             </svg>
           )}
-          {/* 运行中显示耗时，完成后显示封面图比例与分辨率标签 */}
+          {/* 运行中显示耗时，完成后显示封面图比例与创建时间 */}
           <div className="absolute top-1.5 left-1.5 flex items-center gap-1">
-            {task.status !== 'done' || !coverRatio || !coverSize ? (
+            {task.status !== 'done' || !coverRatio ? (
               <span className="flex items-center gap-1 bg-black/50 text-white text-[10px] sm:text-xs px-1.5 py-0.5 rounded backdrop-blur-sm font-mono">
                 <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
@@ -359,7 +361,7 @@ export default function TaskCard({
                   {coverRatio}
                 </span>
                 <span className="bg-black/50 text-white/90 text-[10px] sm:text-xs px-1.5 py-0.5 rounded backdrop-blur-sm font-medium">
-                  {coverSize}
+                  {createdTime}
                 </span>
               </>
             )}

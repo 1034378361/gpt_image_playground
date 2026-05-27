@@ -607,10 +607,12 @@ export function applyTemplateWithVariables(template: PromptTemplate, values: Rec
 
 /** 复用配置 */
 export async function reuseConfig(task: TaskRecord) {
-  const { setPrompt, setParams, setInputImages, setMaskDraft, clearMaskDraft, setActiveTemplateId, requestComposerReveal, showToast } = useStore.getState()
+  const { setPrompt, setParams, setInputImages, setMaskDraft, clearMaskDraft, setActiveTemplateId, setPendingParentTaskId, setCurrentProjectId, requestComposerReveal, showToast } = useStore.getState()
   setPrompt(task.prompt)
   setParams(task.params)
   setActiveTemplateId(task.templateId ?? null)
+  setPendingParentTaskId(task.id)
+  setCurrentProjectId(task.projectId ?? null)
   requestComposerReveal()
 
   // 恢复输入图片
@@ -640,24 +642,32 @@ export async function reuseConfig(task: TaskRecord) {
   showToast('已复用配置到输入框', 'success')
 }
 
-/** 编辑输出：将输出图加入输入 */
+/** 编辑输出：将输出图替换到输入 */
 export async function editOutputs(task: TaskRecord) {
-  const { inputImages, addInputImage, clearMaskDraft, setPendingParentTaskId, setCurrentProjectId, showToast } = useStore.getState()
+  const { setPrompt, setParams, setInputImages, clearMaskDraft, setPendingParentTaskId, setCurrentProjectId, requestComposerReveal, showToast } = useStore.getState()
   if (!task.outputImages?.length) return
 
-  clearMaskDraft()
-  let added = 0
+  const imgs: InputImage[] = []
   for (const imgId of task.outputImages) {
-    if (inputImages.find((i) => i.id === imgId)) continue
     const dataUrl = await ensureImageCached(imgId)
     if (dataUrl) {
-      addInputImage({ id: imgId, dataUrl })
-      added++
+      imgs.push({ id: imgId, dataUrl })
     }
   }
+
+  if (!imgs.length) {
+    showToast('输出图已不可用', 'error')
+    return
+  }
+
+  setPrompt(task.prompt)
+  setParams(task.params)
+  clearMaskDraft()
+  setInputImages(imgs)
   setPendingParentTaskId(task.id)
   setCurrentProjectId(task.projectId ?? null)
-  showToast(`已添加 ${added} 张输出图到输入`, 'success')
+  requestComposerReveal()
+  showToast(`已载入 ${imgs.length} 张输出图到输入`, 'success')
 }
 
 /** 删除多条任务 */

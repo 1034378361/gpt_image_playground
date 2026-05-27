@@ -84,8 +84,6 @@ def _pick_default_template_target() -> tuple[str, ChannelModel]:
                 return channel.id, model
     raise HTTPException(status_code=400, detail="No enabled channel/model is available for imported templates")
 
-
-
 def _normalize_example_images(values: list[str] | None) -> list[str]:
     seen: set[str] = set()
     images: list[str] = []
@@ -283,17 +281,60 @@ def _normalize_open_prompt_fields(source: OpenPromptSource, item: dict[str, str 
     }
 
 
-def _score_open_prompt_item(fields: dict[str, Any], source_name: str) -> float:
-    return _calculate_template_quality(
-        str(fields["title"]),
-        str(fields["prompt"]),
-        [str(tag) for tag in fields["tags"]],
-        str(fields["category"]),
-        None,
-        str(fields["image"]) or None,
-        list(fields["exampleImages"]),
-        source_name,
-    )
+def _calculate_open_prompt_import_quality(fields: dict[str, Any], source_name: str) -> float:
+    title = str(fields.get("title") or "").strip()
+    prompt = str(fields.get("prompt") or "").strip()
+    tags = [str(tag).strip() for tag in fields.get("tags", []) if str(tag).strip()]
+    category = str(fields.get("category") or "").strip()
+    image = str(fields.get("image") or "").strip()
+    source_url = str(fields.get("sourceUrl") or "").strip()
+    source_author = str(fields.get("sourceAuthor") or "").strip()
+    license_name = str(fields.get("licenseName") or "").strip()
+    example_images = _normalize_example_images(fields.get("exampleImages", []))
+
+    score = 0.0
+    prompt_len = len(prompt)
+    if prompt_len >= 240:
+        score += 28
+    elif prompt_len >= 140:
+        score += 24
+    elif prompt_len >= 80:
+        score += 20
+    elif prompt_len >= 40:
+        score += 16
+    elif prompt_len >= 20:
+        score += 8
+
+    combined = f"{title} {prompt} {category} {' '.join(tags)}".lower()
+    relevance_hits = _count_term_hits(combined, IMAGE_PROMPT_POSITIVE_TERMS)
+    score += min(relevance_hits, 8) * 2.5
+    score += min(_template_variable_count(prompt), 4) * 1.5
+
+    if title and len(title) <= 90:
+        score += 7
+    if category:
+        score += 7
+    score += min(len(tags), 5) * 2
+    if source_name:
+        score += 2
+    if source_url:
+        score += 2
+    if source_author:
+        score += 2
+    if license_name:
+        score += 2
+
+    if image:
+        score += 12
+    if example_images:
+        score += min(len(example_images), 3) * 2.5 + 5.5
+
+    if prompt_len >= 40:
+        score += 5
+    if relevance_hits >= 2:
+        score += 5
+
+    return round(max(0.0, min(score, 100.0)), 1)
 
 
 def _normalize_open_prompt_item(source: OpenPromptSource, item: dict[str, str | list[str]]) -> dict[str, Any]:
@@ -301,7 +342,7 @@ def _normalize_open_prompt_item(source: OpenPromptSource, item: dict[str, str | 
     return {
         "key": _open_prompt_item_key(source, item),
         **fields,
-        "qualityScore": _score_open_prompt_item(fields, source.source_name),
+        "qualityScore": _calculate_open_prompt_import_quality(fields, source.source_name),
     }
 
 
@@ -330,7 +371,7 @@ def _open_prompt_exists(conn: Any, prompt_source: OpenPromptSource, item: dict[s
     if source_url:
         exists = conn.execute(
             """
-            SELECT id FROM prompt_templates
+            SELECT id, quality_score FROM prompt_templates
             WHERE source_name = ? AND source_url = ?
             """,
             (prompt_source.source_name, source_url),
@@ -339,7 +380,7 @@ def _open_prompt_exists(conn: Any, prompt_source: OpenPromptSource, item: dict[s
             return exists
     same_source = conn.execute(
         """
-        SELECT id FROM prompt_templates
+        SELECT id, quality_score FROM prompt_templates
         WHERE source_name = ? AND title = ? AND source_author = ?
         """,
         (prompt_source.source_name, item["title"], item["sourceAuthor"]),
@@ -349,7 +390,7 @@ def _open_prompt_exists(conn: Any, prompt_source: OpenPromptSource, item: dict[s
     prompt_text = str(item.get("prompt") or "").strip()
     if prompt_text:
         return conn.execute(
-            "SELECT id FROM prompt_templates WHERE prompt = ? LIMIT 1",
+            "SELECT id, quality_score FROM prompt_templates WHERE prompt = ? LIMIT 1",
             (prompt_text,),
         ).fetchone()
     return None
@@ -431,7 +472,6 @@ def _build_open_prompt_insert_params(
 
 
 def _apply_open_prompt_post_write_effects(conn: Any, template_id: str, actor: UserOut) -> None:
-    _recalculate_template_quality(conn, template_id)
     _snapshot_template_version(conn, template_id, actor)
 
 
@@ -461,6 +501,7 @@ def _upsert_open_prompt_items(
             quality_score = float(item["qualityScore"])
             exists = _open_prompt_exists(conn, prompt_source, item)
             if exists:
+                quality_score = max(quality_score, float(exists["quality_score"] or 0))
                 cur = conn.execute(
                     """
                     UPDATE prompt_templates SET

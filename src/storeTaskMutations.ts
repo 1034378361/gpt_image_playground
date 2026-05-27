@@ -34,7 +34,7 @@ export function updateTaskInStore(taskId: string, patch: Partial<TaskRecord>) {
   void Promise.resolve(putTask(updatedTask)).catch(() => undefined)
 }
 
-export async function patchTaskInStore(
+async function patchTaskInStore(
   taskId: string,
   patch: Partial<TaskRecord>,
   options: PatchTaskOptions = {},

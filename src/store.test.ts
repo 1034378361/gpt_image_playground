@@ -2,11 +2,12 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import * as backendApi from './lib/backendApi'
 import { DEFAULT_PARAMS, DEFAULT_SETTINGS } from './types'
 import type { TaskRecord } from './types'
-import { editOutputs, removeMultipleTasks, removeTask, useStore } from './store'
+import { editOutputs, imageCache, removeMultipleTasks, removeTask, reuseConfig, useStore } from './store'
 import { submitTask } from './storeBackend'
 import { moveTasksToProject, setTaskFavorite } from './storeTaskMutations'
 
 const imageA = { id: 'image-a', dataUrl: 'data:image/png;base64,a' }
+const imageB = { id: 'image-b', dataUrl: 'data:image/png;base64,b' }
 
 function task(overrides: Partial<TaskRecord> = {}): TaskRecord {
   return {
@@ -29,6 +30,7 @@ function task(overrides: Partial<TaskRecord> = {}): TaskRecord {
 describe('mask draft lifecycle in store actions', () => {
   beforeEach(() => {
     vi.restoreAllMocks()
+    imageCache.clear()
     useStore.setState({
       settings: {
         ...DEFAULT_SETTINGS,
@@ -45,6 +47,9 @@ describe('mask draft lifecycle in store actions', () => {
       },
       prompt: 'prompt',
       inputImages: [],
+      composerRevealTick: 0,
+      pendingParentTaskId: null,
+      currentProjectId: null,
       maskDraft: null,
       maskEditorImageId: null,
       params: { ...DEFAULT_PARAMS },
@@ -61,7 +66,8 @@ describe('mask draft lifecycle in store actions', () => {
     })
   })
 
-  it('clears an existing mask when quick edit-output adds outputs as references', async () => {
+  it('clears an existing mask when quick edit-output replaces references with outputs', async () => {
+    imageCache.set(imageA.id, imageA.dataUrl)
     useStore.setState({
       inputImages: [imageA],
       maskDraft: {
@@ -74,6 +80,33 @@ describe('mask draft lifecycle in store actions', () => {
     await editOutputs(task({ outputImages: [imageA.id] }))
 
     expect(useStore.getState().maskDraft).toBeNull()
+  })
+
+  it('replaces current references and reveals the composer when editing outputs', async () => {
+    imageCache.set(imageA.id, imageA.dataUrl)
+    imageCache.set(imageB.id, imageB.dataUrl)
+    const sourceParams = { ...DEFAULT_PARAMS, quality: 'high' as const, n: 2 }
+    useStore.setState({ inputImages: [imageA], prompt: 'stale prompt', params: { ...DEFAULT_PARAMS, quality: 'low' } })
+
+    await editOutputs(task({ id: 'task-b', projectId: 'project-b', prompt: 'source prompt', params: sourceParams, outputImages: [imageB.id] }))
+
+    expect(useStore.getState().prompt).toBe('source prompt')
+    expect(useStore.getState().params).toEqual(sourceParams)
+    expect(useStore.getState().inputImages).toEqual([imageB])
+    expect(useStore.getState().pendingParentTaskId).toBe('task-b')
+    expect(useStore.getState().currentProjectId).toBe('project-b')
+    expect(useStore.getState().composerRevealTick).toBe(1)
+  })
+
+  it('refreshes the remix source and project when reusing config', async () => {
+    useStore.setState({ pendingParentTaskId: 'stale-task', currentProjectId: 'stale-project' })
+
+    await reuseConfig(task({ id: 'task-b', projectId: 'project-b', prompt: 'new prompt' }))
+
+    expect(useStore.getState().prompt).toBe('new prompt')
+    expect(useStore.getState().pendingParentTaskId).toBe('task-b')
+    expect(useStore.getState().currentProjectId).toBe('project-b')
+    expect(useStore.getState().composerRevealTick).toBe(1)
   })
 
   it('clears an invalid mask draft when submit cannot find the mask target image', async () => {

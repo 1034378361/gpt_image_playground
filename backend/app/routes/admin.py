@@ -88,6 +88,14 @@ SERVER_BACKUP_DELETE_ORDER = [
     "users",
 ]
 
+SERVER_BACKUP_IDENTIFIER_ALLOWLIST = frozenset([*SERVER_BACKUP_TABLES, *SERVER_BACKUP_DELETE_ORDER])
+
+
+def backup_table_identifier(table: str) -> str:
+    if table not in SERVER_BACKUP_IDENTIFIER_ALLOWLIST:
+        raise ValueError(f"Unsupported backup table: {table}")
+    return table
+
 
 def save_auth_settings(conn: Any, registration_mode: str) -> dict[str, Any]:
     ts = now_ms()
@@ -176,7 +184,7 @@ def build_server_backup_archive() -> bytes:
     exported_at = now_ms()
     with get_conn() as conn:
         tables = {
-            table: [row_to_plain_dict(row) for row in conn.execute(f"SELECT * FROM {table}").fetchall()]
+            table: [row_to_plain_dict(row) for row in conn.execute(f"SELECT * FROM {backup_table_identifier(table)}").fetchall()]
             for table in SERVER_BACKUP_TABLES
         }
 
@@ -766,7 +774,7 @@ def restore_audit_and_discovery_tables(conn: Any, tables: dict[str, list[dict[st
 
 def restore_backup_tables(conn: Any, tables: dict[str, list[dict[str, Any]]], actor: UserOut) -> str:
     for table in SERVER_BACKUP_DELETE_ORDER:
-        conn.execute(f"DELETE FROM {table}")
+        conn.execute(f"DELETE FROM {backup_table_identifier(table)}")
 
     restored_users = restore_auth_tables(conn, tables, actor)
     restore_project_and_channel_tables(conn, tables)

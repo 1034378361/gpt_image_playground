@@ -256,14 +256,14 @@ class PromptTemplateIn(BaseModel):
 
     @field_validator("prompt")
     @classmethod
-    def prompt_not_empty(cls, v: str) -> str:
+    def prompt_not_empty(_cls, v: str) -> str:
         if not v.strip():
             raise ValueError("提示词不能为空")
         return v
 
     @field_validator("externalCoverUrl")
     @classmethod
-    def validate_cover_url(cls, v: str | None) -> str | None:
+    def validate_cover_url(_cls, v: str | None) -> str | None:
         if v and not v.startswith(("https://", "http://")):
             raise ValueError("封面 URL 必须以 http:// 或 https:// 开头")
         return v

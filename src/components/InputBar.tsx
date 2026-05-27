@@ -729,6 +729,20 @@ export default function InputBar() {
     })
   }, [isMobile])
 
+  useEffect(() => {
+    if (isMobile || (!desktopManualOpen && !desktopFocused)) return
+
+    const handlePointerDown = (event: PointerEvent) => {
+      const dock = dockStackRef.current
+      if (event.target instanceof Node && dock?.contains(event.target)) return
+      setDesktopFocused(false)
+      setDesktopManualOpen(false)
+    }
+
+    window.addEventListener('pointerdown', handlePointerDown, true)
+    return () => window.removeEventListener('pointerdown', handlePointerDown, true)
+  }, [desktopFocused, desktopManualOpen, isMobile])
+
   const selectClass = 'px-3 py-1.5 rounded-xl border border-gray-200/60 dark:border-white/[0.08] bg-white/50 dark:bg-white/[0.03] hover:bg-white dark:hover:bg-white/[0.06] text-xs transition-all duration-200 shadow-sm'
 
   const composerImagesElement = (
@@ -829,6 +843,10 @@ export default function InputBar() {
               if (!isMobile) {
                 suppressDesktopHoverReveal.current = false
                 setDesktopManualOpen(false)
+                setDesktopFocused(false)
+                if (dockStackRef.current?.contains(document.activeElement)) {
+                  ;(document.activeElement as HTMLElement).blur()
+                }
               }
             }}
             onFocusCapture={() => !isMobile && setDesktopFocused(true)}

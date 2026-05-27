@@ -76,6 +76,26 @@ def create_channel(client: TestClient, name: str = "OpenAI"):
     return body
 
 
+def mock_open_prompt_readme(monkeypatch, readme: str) -> None:
+    import backend.app.main as main
+
+    class FakeAsyncClient:
+        def __init__(self, timeout):
+            self.timeout = timeout
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def get(self, url):
+            request = httpx.Request("GET", url)
+            return httpx.Response(200, text=readme, request=request)
+
+    monkeypatch.setattr(main.httpx, "AsyncClient", FakeAsyncClient)
+
+
 def template_payload(channel_id: str):
     return {
         "title": "Hero product",
@@ -452,7 +472,6 @@ def test_template_list_pagination_and_scope_permissions(monkeypatch, tmp_path):
 
 def test_open_prompt_library_import_sources_and_dedupes(monkeypatch, tmp_path):
     client = make_client(monkeypatch, tmp_path)
-    import backend.app.main as main
 
     register(client)
     create_channel(client)
@@ -468,21 +487,7 @@ A premium test product on a clean studio background
 **Source:** [@tester](https://x.com/tester/status/1)
 """
 
-    class FakeAsyncClient:
-        def __init__(self, timeout):
-            self.timeout = timeout
-
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, exc_type, exc, tb):
-            return False
-
-        async def get(self, url):
-            request = httpx.Request("GET", url)
-            return httpx.Response(200, text=readme, request=request)
-
-    monkeypatch.setattr(main.httpx, "AsyncClient", FakeAsyncClient)
+    mock_open_prompt_readme(monkeypatch, readme)
 
     preview = client.get("/api/admin/templates/import-open-library/preview?source=zerolu&limit=1")
     assert preview.status_code == 200
@@ -494,6 +499,9 @@ A premium test product on a clean studio background
     assert preview_body["newCount"] == 1
     assert preview_body["duplicateCount"] == 0
     assert preview_body["items"][0]["isDuplicate"] is False
+    assert preview_body["items"][0]["qualityScore"] >= 70
+    assert preview_body["highQualityCount"] == 1
+    assert preview_body["highQualityNewCount"] == 1
     selected_key = preview_body["items"][0]["key"]
 
     imported = client.post(
@@ -513,13 +521,20 @@ A premium test product on a clean studio background
     assert templates["items"][0]["externalCoverUrl"].endswith("/assets/test-product.jpg")
     assert templates["items"][0]["exampleImages"][0].endswith("/assets/test-product.jpg")
     assert templates["items"][0]["recommendedModel"] == "gpt-image-2"
-    assert templates["items"][0]["qualityScore"] > 0
+    assert templates["items"][0]["qualityScore"] >= 70
 
     sources = client.get("/api/admin/open-prompt-sources")
     assert sources.status_code == 200
     zerolu = next(item for item in sources.json() if item["id"] == "zerolu")
     assert zerolu["importedCount"] == 1
     assert zerolu["licenseName"] == "MIT"
+
+    from backend.app.db import get_conn
+    with get_conn() as conn:
+        conn.execute(
+            "UPDATE prompt_templates SET quality_score = ? WHERE id = ?",
+            (95, templates["items"][0]["id"]),
+        )
 
     repeated_preview = client.get("/api/admin/templates/import-open-library/preview?source=zerolu&limit=1")
     assert repeated_preview.status_code == 200
@@ -534,14 +549,65 @@ A premium test product on a clean studio background
     assert repeated.status_code == 200
     assert repeated.json()["created"] == 0
     assert repeated.json()["skipped"] == 1
+    refreshed_templates = client.get("/api/templates?scope=public").json()
+    assert refreshed_templates["items"][0]["qualityScore"] == 95
+
+
+def test_open_prompt_preview_keeps_sparse_prompts_below_high_quality(monkeypatch, tmp_path):
+    client = make_client(monkeypatch, tmp_path)
+
+    register(client)
+    create_channel(client)
+
+    readme = """
+### Simple Scene
+
+**Prompt:**
+```text
+A photo of a plain object on a simple background with soft studio lighting.
+```
+"""
+
+    mock_open_prompt_readme(monkeypatch, readme)
+
+    preview = client.get("/api/admin/templates/import-open-library/preview?source=zerolu&limit=1")
+    assert preview.status_code == 200
+    preview_body = preview.json()
+    assert preview_body["items"][0]["qualityScore"] < 70
+    assert preview_body["highQualityCount"] == 0
+    assert preview_body["highQualityNewCount"] == 0
+
+
+def test_open_prompt_preview_rejects_code_like_prompt_sections(monkeypatch, tmp_path):
+    client = make_client(monkeypatch, tmp_path)
+
+    register(client)
+    create_channel(client)
+
+    readme = """
+### API Usage
+
+**Prompt:**
+```text
+npm install image-sdk
+import { renderImage } from 'image-sdk'
+const result = await renderImage({ prompt: 'Create a cinematic product photo with studio lighting' })
+```
+"""
+
+    mock_open_prompt_readme(monkeypatch, readme)
+
+    preview = client.get("/api/admin/templates/import-open-library/preview?source=zerolu&limit=1")
+    assert preview.status_code == 200
+    preview_body = preview.json()
+    assert preview_body["total"] == 0
+    assert preview_body["items"] == []
 
 
 def test_open_prompt_import_respects_empty_selection_and_omitted_selection(monkeypatch, tmp_path):
     client = make_client(monkeypatch, tmp_path)
     register(client)
     create_channel(client)
-
-    import backend.app.main as main
 
     readme = """
 ### Test Product Ad
@@ -554,21 +620,7 @@ A premium test product on a clean studio background
 **Source:** [@tester](https://x.com/tester/status/1)
 """
 
-    class FakeAsyncClient:
-        def __init__(self, timeout):
-            self.timeout = timeout
-
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, exc_type, exc, tb):
-            return False
-
-        async def get(self, url):
-            request = httpx.Request("GET", url)
-            return httpx.Response(200, text=readme, request=request)
-
-    monkeypatch.setattr(main.httpx, "AsyncClient", FakeAsyncClient)
+    mock_open_prompt_readme(monkeypatch, readme)
 
     empty_import = client.post(
         "/api/admin/templates/import-open-library",
@@ -1119,6 +1171,41 @@ def test_auto_codex_cli_detection_retries_without_quality(monkeypatch, tmp_path)
     assert updated["codexCliMode"] == "auto"
     assert updated["codexCli"] is True
     assert updated["compatibilityStatus"] == "codex"
+
+
+def test_channel_patch_empty_api_key_keeps_existing_key(monkeypatch, tmp_path):
+    client = make_client(monkeypatch, tmp_path)
+    import backend.app.main as main
+
+    register(client)
+    channel = create_channel(client)
+
+    patched = client.patch(
+        f"/api/admin/channels/{channel['id']}",
+        json={"name": "Renamed", "apiKey": ""},
+    )
+    assert patched.status_code == 200
+    assert patched.json()["name"] == "Renamed"
+
+    class FakeAsyncClient:
+        def __init__(self, timeout):
+            self.timeout = timeout
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def get(self, url, **kwargs):
+            request = httpx.Request("GET", url)
+            assert kwargs["headers"]["Authorization"] == "Bearer sk-test"
+            return httpx.Response(200, json={"data": [{"id": "gpt-image-2"}]}, request=request)
+
+    monkeypatch.setattr(main.httpx, "AsyncClient", FakeAsyncClient)
+
+    checked = client.post(f"/api/admin/channels/{channel['id']}/health-check")
+    assert checked.status_code == 200
 
 
 def test_channel_health_is_public_and_audited(monkeypatch, tmp_path):
