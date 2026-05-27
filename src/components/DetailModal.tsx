@@ -1,8 +1,8 @@
 import { useEffect, useState, useMemo, useRef } from 'react'
 import { useStore, getCachedImage, ensureImageCached, reuseConfig, editOutputs, removeTask, showCodexCliPrompt, getCodexCliPromptKey } from '../store'
 import { setTemplateCover } from '../storeTemplateActions'
-import { updateTaskInStore } from '../storeTaskMutations'
-import { cancelTask, generateVariation } from '../storeBackend'
+import { setTaskFavorite } from '../storeTaskMutations'
+import { cancelTask, generateVariation, retryTask } from '../storeBackend'
 import { useCloseOnEscape } from '../hooks/useCloseOnEscape'
 import { formatImageRatio } from '../lib/size'
 import { ActualValueBadge, DetailParamValue } from '../lib/paramDisplay'
@@ -254,11 +254,15 @@ export default function DetailModal() {
   }
 
   const handleToggleFavorite = () => {
-    updateTaskInStore(task.id, { isFavorite: !task.isFavorite })
+    void setTaskFavorite(task.id, !task.isFavorite).catch(() => undefined)
   }
 
   const handleCancel = () => {
     cancelTask(task)
+  }
+
+  const handleRetry = () => {
+    void retryTask(task)
   }
 
   const handleCopyError = async () => {
@@ -744,6 +748,17 @@ export default function DetailModal() {
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18 18 6M6 6l12 12" />
                 </svg>
                 取消任务
+              </button>
+            )}
+            {task.status === 'error' && (
+              <button
+                onClick={handleRetry}
+                className="col-span-2 sm:flex-1 flex items-center justify-center gap-1.5 px-3 py-2 rounded-xl bg-blue-50 dark:bg-blue-500/10 text-blue-600 dark:text-blue-400 hover:bg-blue-100 dark:hover:bg-blue-500/20 transition text-sm font-medium whitespace-nowrap"
+              >
+                <svg className="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                </svg>
+                重试任务
               </button>
             )}
             <button

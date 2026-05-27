@@ -667,6 +667,17 @@ export async function removeMultipleTasks(taskIds: string[]) {
   if (!taskIds.length) return
 
   const toDelete = new Set(taskIds)
+  const serverStorageReady = isServerStorageReady()
+
+  if (serverStorageReady) {
+    try {
+      await backendApi.batchDeleteGenerations(useStore.getState().settings, taskIds)
+    } catch (err) {
+      showToast(`批量删除失败：${err instanceof Error ? err.message : String(err)}`, 'error')
+      return
+    }
+  }
+
   const remaining = tasks.filter(t => !toDelete.has(t.id))
 
   const deletedImageIds = new Set<string>()
@@ -683,9 +694,7 @@ export async function removeMultipleTasks(taskIds: string[]) {
     total: Math.max(0, useStore.getState().taskPage.total - toDelete.size),
     loaded: remaining.length,
   })
-  if (isServerStorageReady()) {
-    await backendApi.batchDeleteGenerations(useStore.getState().settings, taskIds).catch(() => undefined)
-  } else {
+  if (!serverStorageReady) {
     for (const id of taskIds) {
       await dbDeleteTask(id)
     }
@@ -726,6 +735,16 @@ export async function removeTask(task: TaskRecord) {
     ...(task.outputImages || []),
   ])
 
+  const serverStorageReady = isServerStorageReady()
+  if (serverStorageReady) {
+    try {
+      await backendApi.deleteGeneration(useStore.getState().settings, task.id)
+    } catch (err) {
+      showToast(`删除记录失败：${err instanceof Error ? err.message : String(err)}`, 'error')
+      return
+    }
+  }
+
   // 从列表移除
   const remaining = tasks.filter((t) => t.id !== task.id)
   setTasks(remaining)
@@ -733,9 +752,7 @@ export async function removeTask(task: TaskRecord) {
     total: Math.max(0, useStore.getState().taskPage.total - 1),
     loaded: remaining.length,
   })
-  if (isServerStorageReady()) {
-    await backendApi.deleteGeneration(useStore.getState().settings, task.id).catch(() => undefined)
-  } else {
+  if (!serverStorageReady) {
     await dbDeleteTask(task.id)
   }
 

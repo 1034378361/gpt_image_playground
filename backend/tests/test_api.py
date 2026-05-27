@@ -718,6 +718,86 @@ def test_delete_generation_removes_orphan_assets(monkeypatch, tmp_path):
     assert not main.Path(asset_row["path"]).exists()
 
 
+def test_batch_delete_generations_removes_assets_shared_within_deleted_batch(monkeypatch, tmp_path):
+    client = make_client(monkeypatch, tmp_path)
+    import backend.app.db as db
+    import backend.app.main as main
+
+    user = register(client)
+    channel = create_channel(client)
+
+    async def fake_call_upstream(_payload):
+        return (
+            [PIXEL_DATA_URL],
+            {"size": "1024x1024", "quality": "high"},
+            [{"size": "1024x1024", "quality": "high"}],
+            ["A revised studio prompt"],
+        )
+
+    monkeypatch.setattr("backend.app.routes.generations.call_upstream", fake_call_upstream)
+
+    generated = client.post(
+        "/api/generate",
+        json={
+            "channelId": channel["id"],
+            "model": "gpt-image-2",
+            "prompt": "A bottle on a clean white background",
+            "params": template_payload(channel["id"])["params"],
+            "inputImageDataUrls": [],
+            "maskDataUrl": None,
+        },
+    )
+    assert generated.status_code == 200
+    first_task = generated.json()["task"]
+    asset_id = first_task["outputImages"][0]
+    second_task_id = "task-shared-asset"
+
+    with db.get_conn() as conn:
+        asset_row = conn.execute("SELECT * FROM assets WHERE id = ?", (asset_id,)).fetchone()
+        assert asset_row is not None
+        conn.execute(
+            """
+            INSERT INTO generation_tasks (
+              id, user_id, prompt, params_json, input_image_ids_json, mask_target_image_id, mask_image_id,
+              output_image_ids_json, actual_params_json, actual_params_by_image_json, revised_prompt_by_image_json,
+              status, error, created_at, finished_at, elapsed, is_favorite, diagnostics_json, channel_id, api_mode, model
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                second_task_id,
+                user["id"],
+                "A second task sharing the first output",
+                json.dumps(template_payload(channel["id"])["params"]),
+                json.dumps([asset_id]),
+                None,
+                None,
+                json.dumps([asset_id]),
+                None,
+                None,
+                None,
+                "done",
+                None,
+                10,
+                20,
+                10,
+                0,
+                "[]",
+                channel["id"],
+                "images",
+                "gpt-image-2",
+            ),
+        )
+
+    deleted = client.post("/api/generations/batch-delete", json={"ids": [first_task["id"], second_task_id]})
+
+    assert deleted.status_code == 200
+    assert deleted.json()["deleted"] == 2
+    assert client.get(f"/api/generations/{first_task['id']}").status_code == 404
+    assert client.get(f"/api/generations/{second_task_id}").status_code == 404
+    assert client.get(f"/api/assets/{asset_id}").status_code == 404
+    assert not main.Path(asset_row["path"]).exists()
+
+
 def test_admin_can_export_and_import_server_backup(monkeypatch, tmp_path):
     client = make_client(monkeypatch, tmp_path)
 

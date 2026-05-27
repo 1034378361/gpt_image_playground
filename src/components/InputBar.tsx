@@ -1,8 +1,8 @@
 import { useRef, useEffect, useCallback, useState, useMemo } from 'react'
 import { useStore, addImageFromFile, removeMultipleTasks, selectChannelModel, optimizeCurrentPrompt, ensureImageCached } from '../store'
 import { removeMultipleTemplates } from '../storeTemplateActions'
-import { updateTaskInStore } from '../storeTaskMutations'
-import { refreshGenerationPreflight, submitTask } from '../storeBackend'
+import { moveTasksToProject, setTaskFavorite } from '../storeTaskMutations'
+import { refreshGenerationPreflight, submitTask, cancelMultipleTasks } from '../storeBackend'
 import { DEFAULT_PARAMS } from '../types'
 import { createMaskPreviewDataUrl } from '../lib/canvasImage'
 import { canManageSystem } from '../lib/roles'
@@ -83,6 +83,15 @@ export default function InputBar() {
   const currentChannel = channels.find((channel) => channel.id === settings.channelId) ?? null
   const enabledModels = currentChannel?.models.filter((model) => model.enabled) ?? []
 
+  const selectedTasks = useMemo(
+    () => tasks.filter((t) => selectedTaskIds.includes(t.id)),
+    [tasks, selectedTaskIds],
+  )
+  const selectedActiveTaskCount = useMemo(
+    () => selectedTasks.filter((t) => t.status === 'queued' || t.status === 'running').length,
+    [selectedTasks],
+  )
+  const activeProjects = useMemo(() => projects.filter((project) => !project.isArchived), [projects])
   const filteredTasks = useMemo(() => {
     const sorted = [...tasks].sort((a, b) => b.createdAt - a.createdAt)
     const q = searchQuery.trim().toLowerCase()
@@ -108,7 +117,6 @@ export default function InputBar() {
   }, [selectedTaskIds.length, filteredTasks, clearSelection, setSelectedTaskIds])
 
   const handleToggleFavorite = useCallback(() => {
-    const selectedTasks = tasks.filter((t) => selectedTaskIds.includes(t.id))
     const allFavorite = selectedTasks.length > 0 && selectedTasks.every((t) => t.isFavorite)
     const newFavoriteState = !allFavorite
     setConfirmDialog({
@@ -117,14 +125,18 @@ export default function InputBar() {
         ? `确定要收藏选中的 ${selectedTaskIds.length} 条记录吗？`
         : `确定要取消收藏选中的 ${selectedTaskIds.length} 条记录吗？`,
       confirmText: newFavoriteState ? '确认收藏' : '确认取消',
-      action: () => {
-        selectedTaskIds.forEach((id) => {
-          updateTaskInStore(id, { isFavorite: newFavoriteState })
-        })
+      action: async () => {
+        const results = await Promise.allSettled(
+          selectedTaskIds.map((id) => setTaskFavorite(id, newFavoriteState, { silentError: true })),
+        )
+        const failed = results.filter((result) => result.status === 'rejected').length
+        if (failed > 0) {
+          showToast(`${failed} 条记录收藏状态更新失败`, 'error')
+        }
         clearSelection()
       },
     })
-  }, [tasks, selectedTaskIds, clearSelection, setConfirmDialog])
+  }, [selectedTasks, selectedTaskIds, clearSelection, setConfirmDialog, showToast])
 
   const handleDeleteSelected = useCallback(() => {
     setConfirmDialog({
@@ -135,6 +147,34 @@ export default function InputBar() {
       },
     })
   }, [selectedTaskIds, setConfirmDialog])
+
+  const handleCancelSelected = useCallback(() => {
+    if (selectedActiveTaskCount === 0) {
+      showToast('选中的任务没有可取消项', 'info')
+      return
+    }
+    setConfirmDialog({
+      title: '批量取消',
+      message: `确定要取消选中的 ${selectedActiveTaskCount} 个排队/运行中任务吗？`,
+      confirmText: '确认取消',
+      action: async () => {
+        await cancelMultipleTasks(selectedTaskIds)
+        clearSelection()
+      },
+    })
+  }, [clearSelection, selectedActiveTaskCount, selectedTaskIds, setConfirmDialog, showToast])
+
+  const handleMoveSelectedToProject = useCallback((targetProjectId: string | null, targetProjectName: string) => {
+    setConfirmDialog({
+      title: '移动记录',
+      message: `确定要将选中的 ${selectedTaskIds.length} 条记录移动到${targetProjectId ? `「${targetProjectName}」` : '未分组'}吗？`,
+      confirmText: '确认移动',
+      action: async () => {
+        await moveTasksToProject(selectedTaskIds, targetProjectId)
+        clearSelection()
+      },
+    })
+  }, [clearSelection, selectedTaskIds, setConfirmDialog])
 
   const handleDownloadSelected = useCallback(async () => {
     const selectedTasks = tasks.filter((t) => selectedTaskIds.includes(t.id))
@@ -196,6 +236,7 @@ export default function InputBar() {
   const [showSizePicker, setShowSizePicker] = useState(false)
   const [showExperimentLab, setShowExperimentLab] = useState(false)
   const [maskPreviewUrl, setMaskPreviewUrl] = useState('')
+  const [taskProjectMoveValue, setTaskProjectMoveValue] = useState('')
   const handleRef = useRef<HTMLDivElement>(null)
   const dragTouchRef = useRef({ startY: 0, moved: false })
   const compressionHintTimerRef = useRef<number | null>(null)
@@ -824,10 +865,41 @@ export default function InputBar() {
                           <svg className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" viewBox="0 0 24 24"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" /></svg>
                         )}
                       </button>
+                      {selectedActiveTaskCount > 0 && (
+                        <>
+                          <div className="w-px h-5 bg-white/20 mx-1"></div>
+                          <button onClick={handleCancelSelected} className="p-2 text-amber-400 hover:text-amber-300 transition-colors" title="取消选中任务">
+                            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18 18 6M6 6l12 12" /></svg>
+                          </button>
+                        </>
+                      )}
                       <div className="w-px h-5 bg-white/20 mx-1"></div>
                       <button onClick={handleDeleteSelected} className="p-2 text-red-400 hover:text-red-300 transition-colors" title="删除选中">
                         <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
                       </button>
+                      <div className="w-px h-5 bg-white/20 mx-1"></div>
+                      <select
+                        value={taskProjectMoveValue}
+                        onChange={(e) => {
+                          const value = e.target.value
+                          setTaskProjectMoveValue('')
+                          if (!value) return
+                          if (value === '__unassigned__') {
+                            handleMoveSelectedToProject(null, '未分组')
+                            return
+                          }
+                          const project = activeProjects.find((item) => item.id === value)
+                          if (project) handleMoveSelectedToProject(project.id, project.name)
+                        }}
+                        className="max-w-28 rounded-full border border-white/10 bg-gray-700 px-2 py-1 text-xs text-gray-100 outline-none hover:bg-gray-600"
+                        title="移动到项目"
+                      >
+                        <option value="">移动到项目</option>
+                        <option value="__unassigned__">移出项目</option>
+                        {activeProjects.map((project) => (
+                          <option key={project.id} value={project.id}>{project.name}</option>
+                        ))}
+                      </select>
                       <div className="w-px h-5 bg-white/20 mx-1"></div>
                       <button onClick={handleDownloadSelected} className="p-2 text-green-400 hover:text-green-300 transition-colors" title="下载选中图片">
                         <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" /></svg>

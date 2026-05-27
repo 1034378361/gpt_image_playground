@@ -1,7 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { DEFAULT_PARAMS, DEFAULT_SETTINGS } from './types'
+import type { TaskRecord } from './types'
 import { imageCache, useStore } from './store'
-import { importData, loadMoreServerTasks, loadMoreServerTemplates, syncServerData } from './storeBackend'
+import { importData, loadMoreServerTasks, loadMoreServerTemplates, syncServerData, retryTask, cancelMultipleTasks } from './storeBackend'
 import * as backendApi from './lib/backendApi'
 import { clearImages } from './lib/db'
 
@@ -19,6 +20,11 @@ vi.mock('./lib/backendApi', () => ({
   listOpenPromptSources: vi.fn(),
   listAuditLogs: vi.fn(),
   importSystemBackup: vi.fn(),
+  runGeneration: vi.fn(),
+  cancelGeneration: vi.fn(),
+  getGeneration: vi.fn(),
+  streamGeneration: vi.fn(),
+  getAssetDataUrl: vi.fn(),
 }))
 
 vi.mock('./lib/db', () => ({
@@ -45,6 +51,27 @@ function pageResult<T>(items: T[], options: { total?: number; limit?: number; of
     limit: options.limit ?? 80,
     offset: options.offset ?? 0,
     hasMore: options.hasMore ?? false,
+  }
+}
+
+function task(overrides: Partial<TaskRecord> = {}): TaskRecord {
+  return {
+    id: 'task-a',
+    prompt: 'prompt',
+    params: { ...DEFAULT_PARAMS },
+    inputImageIds: [],
+    maskTargetImageId: null,
+    maskImageId: null,
+    outputImages: [],
+    status: 'done',
+    error: null,
+    createdAt: 1,
+    finishedAt: 2,
+    elapsed: 1,
+    channelId: 'channel-a',
+    apiMode: 'images',
+    model: 'model-a',
+    ...overrides,
   }
 }
 
@@ -171,6 +198,14 @@ describe('storeBackend state flows', () => {
       updatedAt: 2,
     })
     mockedBackendApi.importSystemBackup.mockResolvedValue({ ok: true, restorePointName: 'restore-123' })
+    mockedBackendApi.runGeneration.mockResolvedValue({ task: task({ status: 'queued', finishedAt: null, elapsed: null }) })
+    mockedBackendApi.cancelGeneration.mockImplementation(async (_settings, taskId) => task({ id: taskId, status: 'canceled', error: '已取消' }))
+    mockedBackendApi.getGeneration.mockResolvedValue(task())
+    mockedBackendApi.streamGeneration.mockImplementation((taskId, onUpdate) => {
+      Promise.resolve().then(() => onUpdate(task({ id: taskId, status: 'done' })))
+      return vi.fn()
+    })
+    mockedBackendApi.getAssetDataUrl.mockResolvedValue('data:image/png;base64,a')
     mockedClearImages.mockResolvedValue(undefined)
   })
 
@@ -200,6 +235,34 @@ describe('storeBackend state flows', () => {
     expect(state.tasks).toEqual([task])
     expect(state.templatePage).toMatchObject({ total: 3, loaded: 1, hasMore: true, loadingMore: false })
     expect(state.taskPage).toMatchObject({ total: 2, loaded: 1, hasMore: true, loadingMore: false })
+  })
+
+  it('syncServerData preserves the currently loaded task and template window', async () => {
+    const currentTasks = Array.from({ length: 81 }, (_, index) => ({ id: `task-${index}`, prompt: `Task ${index}` }) as any)
+    const currentTemplates = Array.from({ length: 82 }, (_, index) => ({ id: `template-${index}`, title: `Template ${index}` }) as any)
+    const refreshedTasks = currentTasks.map((task) => ({ ...task, prompt: `${task.prompt} refreshed` }))
+    const refreshedTemplates = currentTemplates.map((template) => ({ ...template, title: `${template.title} refreshed` }))
+    useStore.setState({
+      tasks: currentTasks,
+      templates: currentTemplates,
+      taskPage: { total: 120, loaded: currentTasks.length, hasMore: true, loadingMore: false },
+      templatePage: { total: 130, loaded: currentTemplates.length, hasMore: true, loadingMore: false },
+    })
+    mockedBackendApi.listTemplates.mockResolvedValueOnce(
+      pageResult(refreshedTemplates, { total: 130, limit: currentTemplates.length, hasMore: true }),
+    )
+    mockedBackendApi.listGenerations.mockResolvedValueOnce(
+      pageResult(refreshedTasks, { total: 120, limit: currentTasks.length, hasMore: true }),
+    )
+
+    await syncServerData()
+
+    expect(mockedBackendApi.listTemplates).toHaveBeenCalledWith(expect.any(Object), { limit: 82, offset: 0 })
+    expect(mockedBackendApi.listGenerations).toHaveBeenCalledWith(expect.any(Object), { limit: 81, offset: 0 })
+    expect(useStore.getState().templates).toEqual(refreshedTemplates)
+    expect(useStore.getState().tasks).toEqual(refreshedTasks)
+    expect(useStore.getState().templatePage).toMatchObject({ total: 130, loaded: 82, hasMore: true, loadingMore: false })
+    expect(useStore.getState().taskPage).toMatchObject({ total: 120, loaded: 81, hasMore: true, loadingMore: false })
   })
 
   it('loadMoreServerTasks appends unique tasks and updates page state', async () => {
@@ -242,6 +305,53 @@ describe('storeBackend state flows', () => {
     useStore.setState({ templatePage: { total: 2, loaded: 2, hasMore: false, loadingMore: false } })
     await loadMoreServerTemplates()
     expect(mockedBackendApi.listTemplates).not.toHaveBeenCalled()
+  })
+
+  it('retryTask ignores non-error tasks', async () => {
+    const doneTask = task({ status: 'done' })
+    useStore.setState({ tasks: [doneTask] })
+
+    await retryTask(doneTask)
+
+    expect(mockedBackendApi.runGeneration).not.toHaveBeenCalled()
+    expect(useStore.getState().tasks[0]).toEqual(doneTask)
+  })
+
+  it('retryTask reruns failed tasks with the same task id', async () => {
+    const failedTask = task({ status: 'error', error: 'upstream failed', outputImages: ['old-output'], finishedAt: 2, elapsed: 1 })
+    const doneTask = task({ id: failedTask.id, status: 'done', error: null, outputImages: [] })
+    useStore.setState({ tasks: [failedTask] })
+    mockedBackendApi.listGenerations.mockResolvedValueOnce(pageResult([doneTask]))
+
+    await retryTask(failedTask)
+
+    expect(mockedBackendApi.runGeneration).toHaveBeenCalledWith(expect.any(Object), expect.objectContaining({
+      taskId: failedTask.id,
+      prompt: failedTask.prompt,
+      inputImageDataUrls: [],
+      maskDataUrl: undefined,
+    }))
+    expect(useStore.getState().tasks[0]).toMatchObject({ id: failedTask.id, status: 'done', error: null, outputImages: [] })
+    expect(useStore.getState().toast).toMatchObject({ message: '后端生成完成，共 0 张图片', type: 'success' })
+  })
+
+  it('cancelMultipleTasks cancels only queued and running tasks', async () => {
+    const queued = task({ id: 'queued-task', status: 'queued', finishedAt: null, elapsed: null })
+    const running = task({ id: 'running-task', status: 'running', finishedAt: null, elapsed: null })
+    const done = task({ id: 'done-task', status: 'done' })
+    const error = task({ id: 'error-task', status: 'error', error: 'failed' })
+    useStore.setState({ tasks: [queued, running, done, error] })
+
+    await cancelMultipleTasks([queued.id, running.id, done.id, error.id])
+
+    expect(mockedBackendApi.cancelGeneration).toHaveBeenCalledTimes(2)
+    expect(mockedBackendApi.cancelGeneration).toHaveBeenCalledWith(expect.any(Object), queued.id)
+    expect(mockedBackendApi.cancelGeneration).toHaveBeenCalledWith(expect.any(Object), running.id)
+    expect(useStore.getState().tasks.filter((item) => item.status === 'canceled').map((item) => item.id).sort()).toEqual([
+      queued.id,
+      running.id,
+    ].sort())
+    expect(useStore.getState().toast).toMatchObject({ message: '已取消 2 个任务', type: 'success' })
   })
 
   it('importData rejects non-admin users before backend calls', async () => {

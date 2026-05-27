@@ -255,6 +255,10 @@ docker compose up -d --build
 
 - 当前版本线从 `1.0.0` 开始，表示项目已经从原始前端直连工具演进为独立的后端统一管理版本。
 - 后续版本号按本仓库自己的发布节奏维护，不再要求与上游仓库保持同步。
+- `package.json` 是应用版本的唯一来源；`package-lock.json` 必须保持同步。
+- Release tag 必须使用 `v<package.json version>` 格式，例如 `v1.6.0`；CI 会校验 tag、`package.json` 和 lockfile 版本一致后才继续发布。
+- GitHub Release 由 `v*` tag 发布流程创建，前端的版本更新提示会读取最新 GitHub Release。
+- 版本变更先记录在 `CHANGELOG.md` 的 `Unreleased` 中，正式发布时再移动到对应版本号。
 - 如果需要追溯来源，建议在 Release 或变更记录中注明“forked from upstream, independently evolved”。
 
 ## 🔗 致谢

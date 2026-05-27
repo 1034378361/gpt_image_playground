@@ -32,20 +32,22 @@
 
 ## 1.1 当前镜像版本策略
 
-单镜像方案现在支持三类标签：
+`package.json` 是应用版本的唯一来源。正式发布时，Git tag 必须是 `v<package.json version>`，CI 会校验 tag、`package.json` 和 lockfile 版本一致后再发布镜像和 GitHub Release。
 
-- 固定版本：例如 `1.1.0`
-- Git 提交：例如 `sha-900ee06`
+单镜像方案支持三类标签：
+
+- 固定版本：例如 `<version>`
+- Git 提交：例如 `sha-<commit>`
 - `latest`
 
 推荐生产环境在 `.env` 中固定使用版本号，例如：
 
 ```env
 GIP_IMAGE_NAME=gpt-image-playground
-GIP_IMAGE_TAG=1.1.0
+GIP_IMAGE_TAG=<version>
 ```
 
-这样升级和回滚都更明确，不会依赖 `latest`。
+这样升级和回滚都更明确，不会依赖 `latest`。`GIP_IMAGE_TAG` 用来选择或固定运行的镜像标签，不会改变应用的 canonical version。
 
 ## 2. 需要的文件
 
@@ -74,7 +76,7 @@ cp deploy/fnnas.single.env.example .env
 
 ```env
 GIP_IMAGE_NAME=gpt-image-playground
-GIP_IMAGE_TAG=1.1.0
+GIP_IMAGE_TAG=<version>
 GIP_HTTP_PORT=8080
 GIP_SESSION_SECURE=false
 GIP_CORS_ORIGINS=http://你的飞牛IP:8080
@@ -90,7 +92,7 @@ GIP_CORS_ORIGINS=https://你的域名
 如果你是直接在 NAS 上用源码构建，也可以补充下面这些构建元信息：
 
 ```env
-GIP_IMAGE_BUILD_VERSION=1.1.0
+GIP_IMAGE_BUILD_VERSION=<version>
 GIP_IMAGE_BUILD_VCS_REF=local
 GIP_IMAGE_BUILD_DATE=unknown
 ```
@@ -163,13 +165,13 @@ npm run docker:save:single
 - 读取 `package.json` 版本号
 - 读取当前 Git commit
 - 构建三个标签：
-  - `gpt-image-playground:1.1.0`
+  - `gpt-image-playground:<version>`
   - `gpt-image-playground:sha-<commit>`
   - `gpt-image-playground:latest`
 - 导出一个版本化 tar，例如：
 
 ```text
-gpt-image-playground-1.1.0.tar
+gpt-image-playground-<version>.tar
 ```
 
 如果只想构建，不想导出 tar：
@@ -183,10 +185,10 @@ npm run docker:build:single
 ```bash
 docker build \
   -f deploy/Dockerfile.all-in-one \
-  --build-arg APP_VERSION=1.1.0 \
+  --build-arg APP_VERSION=<version> \
   --build-arg VCS_REF=$(git rev-parse HEAD) \
   --build-arg BUILD_DATE=$(date -Iseconds) \
-  -t gpt-image-playground:1.1.0 \
+  -t gpt-image-playground:<version> \
   -t gpt-image-playground:latest \
   .
 ```
@@ -196,7 +198,7 @@ docker build \
 把 tar 传到 NAS 后执行：
 
 ```bash
-docker load -i gpt-image-playground-1.1.0.tar
+docker load -i gpt-image-playground-<version>.tar
 docker compose -f docker-compose.single.yml up -d --force-recreate
 ```
 

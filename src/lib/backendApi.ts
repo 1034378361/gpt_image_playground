@@ -502,6 +502,17 @@ export function getGeneration(settings: AppSettings, taskId: string): Promise<Ta
   return request(settings, `/generations/${taskId}`)
 }
 
+export function patchGeneration(
+  settings: AppSettings,
+  taskId: string,
+  patch: Partial<TaskRecord>,
+): Promise<TaskRecord> {
+  return request(settings, `/generations/${taskId}`, {
+    method: 'PATCH',
+    body: JSON.stringify(patch),
+  })
+}
+
 export function deleteGeneration(settings: AppSettings, taskId: string): Promise<{ ok: boolean }> {
   return request(settings, `/generations/${taskId}`, { method: 'DELETE' })
 }

@@ -465,7 +465,7 @@ function waitForTaskCompletion(taskId: string, timeoutSeconds: number): Promise<
       if (settled) return false
       settled = true
       close()
-      window.clearTimeout(timeoutId)
+      globalThis.clearTimeout(timeoutId)
       return true
     }
 
@@ -484,7 +484,7 @@ function waitForTaskCompletion(taskId: string, timeoutSeconds: number): Promise<
       },
     )
 
-    const timeoutId = window.setTimeout(() => {
+    const timeoutId = globalThis.setTimeout(() => {
       if (!settle()) return
       if (lastTask && !isActiveTaskStatus(lastTask.status)) {
         resolve(lastTask)
@@ -499,17 +499,17 @@ function waitForTaskCompletion(taskId: string, timeoutSeconds: number): Promise<
       if (localTask?.status === 'canceled') {
         if (settle()) resolve(localTask as unknown as TaskRecord)
       } else {
-        window.setTimeout(checkCancel, 2000)
+        globalThis.setTimeout(checkCancel, 2000)
       }
     }
-    window.setTimeout(checkCancel, 2000)
+    globalThis.setTimeout(checkCancel, 2000)
   })
 }
 
 async function fallbackPolling(taskId: string, settings: AppSettings, deadline: number): Promise<TaskRecord> {
   let serverTask = await backendApi.getGeneration(settings, taskId)
   while (isActiveTaskStatus(serverTask.status) && Date.now() < deadline) {
-    await new Promise((resolve) => window.setTimeout(resolve, 1500))
+    await new Promise((resolve) => globalThis.setTimeout(resolve, 1500))
     const localTask = useStore.getState().tasks.find((item) => item.id === taskId)
     if (localTask?.status === 'canceled') return serverTask
     serverTask = await backendApi.getGeneration(settings, taskId)
@@ -622,7 +622,31 @@ async function executeServerTask(taskId: string) {
   }
 }
 
-export async function cancelTask(task: TaskRecord) {
+interface CancelTaskOptions {
+  silent?: boolean
+  refreshStats?: boolean
+}
+
+export async function retryTask(task: TaskRecord) {
+  if (task.status !== 'error') return
+  const startedAt = Date.now()
+  updateTaskInStore(task.id, {
+    status: 'queued',
+    error: null,
+    diagnostics: [],
+    outputImages: [],
+    actualParams: undefined,
+    actualParamsByImage: undefined,
+    revisedPromptByImage: undefined,
+    finishedAt: null,
+    elapsed: null,
+    createdAt: startedAt,
+  })
+  useStore.getState().showToast('已重新提交任务', 'success')
+  await executeServerTask(task.id)
+}
+
+export async function cancelTask(task: TaskRecord, options: CancelTaskOptions = {}) {
   if (!isActiveTaskStatus(task.status)) return
   const finishedAt = Date.now()
   updateTaskInStore(task.id, {
@@ -637,11 +661,36 @@ export async function cancelTask(task: TaskRecord) {
       const serverTask = await backendApi.cancelGeneration(useStore.getState().settings, task.id)
       updateTaskInStore(task.id, serverTask)
     }
-    void refreshQueueStats()
-    useStore.getState().showToast('任务已取消', 'success')
+    if (options.refreshStats !== false) {
+      void refreshQueueStats()
+    }
+    if (!options.silent) {
+      useStore.getState().showToast('任务已取消', 'success')
+    }
   } catch (err) {
-    useStore.getState().showToast(`取消任务失败：${err instanceof Error ? err.message : String(err)}`, 'error')
+    if (!options.silent) {
+      useStore.getState().showToast(`取消任务失败：${err instanceof Error ? err.message : String(err)}`, 'error')
+    }
     await syncServerData()
+    if (options.silent) throw err
+  }
+}
+
+export async function cancelMultipleTasks(taskIds: string[]) {
+  const taskIdSet = new Set(taskIds)
+  const activeTasks = useStore.getState().tasks.filter((task) => taskIdSet.has(task.id) && isActiveTaskStatus(task.status))
+  if (!activeTasks.length) {
+    useStore.getState().showToast('选中的任务没有可取消项', 'info')
+    return
+  }
+
+  const results = await Promise.allSettled(activeTasks.map((task) => cancelTask(task, { silent: true, refreshStats: false })))
+  const failed = results.filter((result) => result.status === 'rejected').length
+  void refreshQueueStats()
+  if (failed > 0) {
+    useStore.getState().showToast(`${failed} 个任务取消失败`, 'error')
+  } else {
+    useStore.getState().showToast(`已取消 ${activeTasks.length} 个任务`, 'success')
   }
 }
 
@@ -726,25 +775,31 @@ export async function syncServerData() {
     currentProjectId,
     setCurrentProjectId,
     showToast,
+    templates: currentTemplates,
+    tasks: currentTasks,
+    templatePage: currentTemplatePage,
+    taskPage: currentTaskPage,
   } = useStore.getState()
   if (!backendUser) return
 
   try {
     const systemManager = canManageSystem(backendUser)
     const templateReviewer = canReviewTemplates(backendUser)
+    const templateLimit = Math.max(INITIAL_TEMPLATE_LIMIT, currentTemplatePage.loaded, currentTemplates.length)
+    const taskLimit = Math.max(INITIAL_TASK_LIMIT, currentTaskPage.loaded, currentTasks.length)
 
     const [
       channels,
       projects,
-      templatePage,
-      taskPage,
+      templateResult,
+      taskResult,
       channelLeaderboard,
       queueStats,
     ] = await Promise.all([
       backendApi.listChannels(settings),
       backendApi.listProjects(settings),
-      backendApi.listTemplates(settings, { limit: INITIAL_TEMPLATE_LIMIT, offset: 0 }),
-      backendApi.listGenerations(settings, { limit: INITIAL_TASK_LIMIT, offset: 0 }),
+      backendApi.listTemplates(settings, { limit: templateLimit, offset: 0 }),
+      backendApi.listGenerations(settings, { limit: taskLimit, offset: 0 }),
       backendApi.listChannelLeaderboard(settings),
       backendApi.getGenerationQueueStats(settings),
     ]) as [
@@ -758,18 +813,18 @@ export async function syncServerData() {
 
     setChannels(channels)
     setProjects(projects)
-    setTemplates(templatePage.items)
-    setTasks(taskPage.items)
+    setTemplates(templateResult.items)
+    setTasks(taskResult.items)
     setTemplatePage({
-      total: templatePage.total,
-      loaded: templatePage.items.length,
-      hasMore: templatePage.hasMore,
+      total: templateResult.total,
+      loaded: templateResult.items.length,
+      hasMore: templateResult.hasMore,
       loadingMore: false,
     })
     setTaskPage({
-      total: taskPage.total,
-      loaded: taskPage.items.length,
-      hasMore: taskPage.hasMore,
+      total: taskResult.total,
+      loaded: taskResult.items.length,
+      hasMore: taskResult.hasMore,
       loadingMore: false,
     })
     setChannelLeaderboard(channelLeaderboard)

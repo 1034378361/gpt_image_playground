@@ -263,7 +263,7 @@ def _open_prompt_item_key(source: OpenPromptSource, item: dict[str, str | list[s
             str(item.get("sourceUrl") or ""),
         ]
     )
-    return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:18]
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:18]
 
 
 def _normalize_open_prompt_fields(source: OpenPromptSource, item: dict[str, str | list[str]]) -> dict[str, Any]:

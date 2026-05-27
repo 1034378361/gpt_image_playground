@@ -1,6 +1,6 @@
 import { useCallback, useMemo, useRef, useState, useEffect } from 'react'
 import { useStore, reuseConfig, editOutputs, removeTask } from '../store'
-import { cancelTask, loadMoreServerTasks, refreshQueueStats } from '../storeBackend'
+import { cancelTask, loadMoreServerTasks, refreshQueueStats, retryTask } from '../storeBackend'
 import TaskCard from './TaskCard'
 import GenerationQueueStatus from './GenerationQueueStatus'
 
@@ -275,6 +275,7 @@ export default function TaskGrid() {
               onEditOutputs={() => editOutputs(task)}
               onDelete={() => handleDelete(task)}
               onCancel={() => cancelTask(task)}
+              onRetry={() => { void retryTask(task) }}
               isSelected={selectedTaskIds.includes(task.id)}
             />
           </div>

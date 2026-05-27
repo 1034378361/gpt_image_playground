@@ -1,7 +1,7 @@
 {
   "name": "gpt-image-playground",
   "private": true,
-  "version": "1.5.3",
+  "version": "1.6.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -12,6 +12,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "e2e": "playwright test",
+    "version:check": "node scripts/check-version.mjs",
     "docker:build:single": "node deploy/build-single-image.mjs",
     "docker:save:single": "node deploy/build-single-image.mjs --save"
   },

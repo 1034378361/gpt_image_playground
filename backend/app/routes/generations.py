@@ -30,6 +30,7 @@ from ..helpers import (
     get_enabled_channel_model,
     insert_audit_log,
     json_dumps,
+    json_loads,
     normalize_base_url,
     normalize_channel_compatibility_status,
     normalize_channel_health_status,
@@ -1567,6 +1568,14 @@ def patch_generation(task_id: str, payload: GenerationTaskPatch, user: UserOut =
     return _patch_generation(task_id, payload, user)
 
 
+def task_asset_ids_from_row(row: Any) -> set[str]:
+    asset_ids = set(json_loads(row["input_image_ids_json"], []))
+    if row["mask_image_id"]:
+        asset_ids.add(row["mask_image_id"])
+    asset_ids.update(json_loads(row["output_image_ids_json"], []))
+    return {str(asset_id) for asset_id in asset_ids if asset_id}
+
+
 @router.delete("/api/generations/{task_id}")
 def delete_generation(task_id: str, user: UserOut = Depends(require_user)) -> dict[str, bool]:
     with get_conn() as conn:
@@ -1617,49 +1626,77 @@ def delete_generation(task_id: str, user: UserOut = Depends(require_user)) -> di
 
 @router.post("/api/generations/batch-delete")
 def batch_delete_generations(payload: BatchDeleteIn, user: UserOut = Depends(require_user)) -> dict[str, int]:
-    ids = list(set(payload.ids[:200]))
-    deleted = 0
+    ids = list(dict.fromkeys(payload.ids[:200]))
+    if not ids:
+        return {"deleted": 0}
+
+    candidate_asset_ids: set[str] = set()
+
     with get_conn() as conn:
+        task_rows = []
         for task_id in ids:
             task_row = conn.execute(
-                "SELECT * FROM generation_tasks WHERE id = ? AND user_id = ?",
-                (task_id, user.id),
+                "SELECT * FROM generation_tasks WHERE user_id = ? AND id = ?",
+                (user.id, task_id),
             ).fetchone()
-            if not task_row:
-                continue
-            asset_rows = conn.execute(
-                "SELECT * FROM assets WHERE task_id = ? AND user_id = ?",
-                (task_id, user.id),
+            if task_row:
+                task_rows.append(task_row)
+        if not task_rows:
+            return {"deleted": 0}
+
+        deleted_ids = [str(task_row["id"]) for task_row in task_rows]
+        deleted_id_set = set(deleted_ids)
+        for task_row in task_rows:
+            candidate_asset_ids.update(task_asset_ids_from_row(task_row))
+
+        for task_id in deleted_ids:
+            attached_asset_rows = conn.execute(
+                "SELECT * FROM assets WHERE user_id = ? AND task_id = ?",
+                (user.id, task_id),
             ).fetchall()
-            conn.execute("DELETE FROM generation_tasks WHERE id = ? AND user_id = ?", (task_id, user.id))
-            for asset_row in asset_rows:
-                asset_id = asset_row["id"]
-                token = f'"{asset_id}"'
-                still_used = conn.execute(
-                    """
-                    SELECT 1
-                    FROM generation_tasks
-                    WHERE user_id = ?
-                      AND (
-                        mask_image_id = ?
-                        OR instr(input_image_ids_json, ?) > 0
-                        OR instr(output_image_ids_json, ?) > 0
-                      )
-                    LIMIT 1
-                    """,
-                    (user.id, asset_id, token, token),
-                ).fetchone()
-                template_cover = conn.execute(
-                    "SELECT 1 FROM prompt_templates WHERE cover_image_id = ? LIMIT 1",
-                    (asset_id,),
-                ).fetchone()
-                if still_used or template_cover:
+            for asset_row in attached_asset_rows:
+                candidate_asset_ids.add(asset_row["id"])
+
+        for task_id in deleted_ids:
+            conn.execute("DELETE FROM generation_tasks WHERE user_id = ? AND id = ?", (user.id, task_id))
+
+        asset_rows = []
+        for asset_id in candidate_asset_ids:
+            asset_row = conn.execute(
+                "SELECT * FROM assets WHERE user_id = ? AND id = ?",
+                (user.id, asset_id),
+            ).fetchone()
+            if asset_row:
+                asset_rows.append(asset_row)
+
+        for asset_row in asset_rows:
+            asset_id = asset_row["id"]
+            token = f'"{asset_id}"'
+            still_used = conn.execute(
+                """
+                SELECT 1
+                FROM generation_tasks
+                WHERE user_id = ?
+                  AND (
+                    mask_image_id = ?
+                    OR instr(input_image_ids_json, ?) > 0
+                    OR instr(output_image_ids_json, ?) > 0
+                  )
+                LIMIT 1
+                """,
+                (user.id, asset_id, token, token),
+            ).fetchone()
+            template_cover = conn.execute(
+                "SELECT 1 FROM prompt_templates WHERE cover_image_id = ? LIMIT 1",
+                (asset_id,),
+            ).fetchone()
+            if still_used or template_cover:
+                if asset_row["task_id"] in deleted_id_set:
                     conn.execute("UPDATE assets SET task_id = NULL WHERE id = ? AND user_id = ?", (asset_id, user.id))
-                    continue
-                conn.execute("DELETE FROM assets WHERE id = ? AND user_id = ?", (asset_id, user.id))
-                delete_asset_files(asset_row)
-            deleted += 1
-    return {"deleted": deleted}
+                continue
+            conn.execute("DELETE FROM assets WHERE id = ? AND user_id = ?", (asset_id, user.id))
+            delete_asset_files(asset_row)
+    return {"deleted": len(deleted_id_set)}
 
 
 # PLACEHOLDER_MORE_ROUTES
