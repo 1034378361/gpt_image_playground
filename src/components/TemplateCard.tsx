@@ -1,4 +1,3 @@
-import { useState } from 'react'
 import type { PromptTemplate } from '../types'
 import { applyTemplate, useStore } from '../store'
 import { duplicateTemplate, toggleTemplateFavorite } from '../storeTemplateActions'
@@ -6,6 +5,7 @@ import { approveTemplate, rejectTemplate, submitTemplateForReview } from '../sto
 import { getTemplateCoverFallback, getTemplatePermissions, getTemplateStatusMeta, UNASSIGNED_PROJECT_ID } from '../lib/templateUtils'
 import { useTemplateActionHelpers } from '../hooks/useTemplateActionHelpers'
 import { useCachedImageMap } from '../hooks/useCachedImageMap'
+import ImageWithFallback from './ImageWithFallback'
 
 interface Props {
   template: PromptTemplate
@@ -58,17 +58,15 @@ export default function TemplateCard({ template }: Props) {
       </label>
       <div className="relative overflow-hidden" style={{ minHeight: '6rem' }}>
         {coverSrc ? (
-          <>
-            <img
-              src={coverSrc}
-              data-image-id={template.coverImageId ?? undefined}
-              data-template-id={template.id}
-              className="w-full object-contain"
-              loading="lazy"
-              alt=""
-              onError={(e) => { (e.target as HTMLImageElement).style.display = 'none' }}
-            />
-          </>
+          <ImageWithFallback
+            src={coverSrc}
+            data-image-id={template.coverImageId ?? undefined}
+            data-template-id={template.id}
+            className="w-full object-contain"
+            fallbackClassName="flex flex-col items-center justify-center gap-2 bg-gray-50 py-8 text-xs text-gray-300 dark:bg-black/20 dark:text-gray-600"
+            loading="lazy"
+            alt=""
+          />
         ) : (
           <div className="flex flex-col items-center justify-center gap-2 text-gray-300 dark:text-gray-600 py-8 bg-gray-50 dark:bg-black/20">
             <svg className="w-10 h-10" fill="none" stroke="currentColor" viewBox="0 0 24 24">

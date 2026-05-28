@@ -89,6 +89,10 @@ SERVER_BACKUP_DELETE_ORDER = [
 ]
 
 SERVER_BACKUP_IDENTIFIER_ALLOWLIST = frozenset([*SERVER_BACKUP_TABLES, *SERVER_BACKUP_DELETE_ORDER])
+SERVER_BACKUP_MAX_ARCHIVE_BYTES = 512 * 1024 * 1024
+SERVER_BACKUP_MAX_ENTRY_COUNT = 20_000
+SERVER_BACKUP_MAX_UNCOMPRESSED_BYTES = 2 * 1024 * 1024 * 1024
+SERVER_BACKUP_MAX_MANIFEST_BYTES = 16 * 1024 * 1024
 
 
 def backup_table_identifier(table: str) -> str:
@@ -225,11 +229,33 @@ def build_server_backup_archive() -> bytes:
 
 def read_server_backup_manifest(archive: zipfile.ZipFile) -> dict[str, Any]:
     try:
-        return json.loads(archive.read("server-backup.json").decode("utf-8"))
+        manifest_info = archive.getinfo("server-backup.json")
+        if manifest_info.file_size > SERVER_BACKUP_MAX_MANIFEST_BYTES:
+            raise HTTPException(status_code=413, detail="备份清单过大")
+        return json.loads(archive.read(manifest_info).decode("utf-8"))
     except KeyError as exc:
         raise HTTPException(status_code=400, detail="备份文件缺少 server-backup.json") from exc
     except json.JSONDecodeError as exc:
         raise HTTPException(status_code=400, detail="备份清单格式无效") from exc
+
+
+def validate_server_backup_archive(archive: zipfile.ZipFile) -> None:
+    infos = archive.infolist()
+    if len(infos) > SERVER_BACKUP_MAX_ENTRY_COUNT:
+        raise HTTPException(status_code=413, detail="备份文件数量过多")
+    total_size = 0
+    seen_names: set[str] = set()
+    for info in infos:
+        name = info.filename
+        normalized = Path(name)
+        if info.is_dir() or name.startswith("/") or "\\" in name or ".." in normalized.parts:
+            raise HTTPException(status_code=400, detail="备份文件路径无效")
+        if name in seen_names:
+            raise HTTPException(status_code=400, detail="备份文件包含重复路径")
+        seen_names.add(name)
+        total_size += info.file_size
+        if total_size > SERVER_BACKUP_MAX_UNCOMPRESSED_BYTES:
+            raise HTTPException(status_code=413, detail="备份解压后数据过大")
 
 
 def validate_server_backup_tables(manifest: dict[str, Any]) -> tuple[dict[str, list[dict[str, Any]]], dict[str, Any]]:
@@ -254,7 +280,10 @@ def ensure_restored_admin_user(tables: dict[str, list[dict[str, Any]]]) -> dict[
 
 
 def parse_server_backup_manifest(archive_bytes: bytes) -> tuple[dict[str, Any], dict[str, list[dict[str, Any]]], dict[str, Any]]:
+    if len(archive_bytes) > SERVER_BACKUP_MAX_ARCHIVE_BYTES:
+        raise HTTPException(status_code=413, detail="备份文件过大")
     with zipfile.ZipFile(io.BytesIO(archive_bytes), mode="r") as archive:
+        validate_server_backup_archive(archive)
         manifest = read_server_backup_manifest(archive)
     tables, image_files = validate_server_backup_tables(manifest)
     tables = ensure_restored_admin_user(tables)
@@ -391,23 +420,31 @@ def finalize_asset_swap(backup_asset_dir: Path) -> None:
         shutil.rmtree(backup_asset_dir)
 
 
+def restored_admin_user_id(restored_users: list[dict[str, Any]], actor: UserOut) -> str:
+    current_actor = next((row for row in restored_users if row["id"] == actor.id), None)
+    same_username = next((row for row in restored_users if row["username"] == actor.username), None)
+    imported_admin = next((row for row in restored_users if row["role"] == "admin"), None)
+    return (current_actor or same_username or imported_admin or restored_users[0])["id"]
+
+
 def create_restored_session(conn: Any, restored_users: list[dict[str, Any]], actor: UserOut) -> str:
-    target_user = next((row for row in restored_users if row["username"] == actor.username), None) or next(
-        (row for row in restored_users if row["role"] == "admin"),
-        restored_users[0],
-    )
+    admin_user_id = restored_admin_user_id(restored_users, actor)
     session_token = create_session_token()
     conn.execute(
         "INSERT INTO sessions (id, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)",
-        (session_token, target_user["id"], now_ms(), None),
+        (session_token, admin_user_id, now_ms(), None),
     )
     return session_token
 
 
 def restore_auth_tables(conn: Any, tables: dict[str, list[dict[str, Any]]], actor: UserOut) -> list[dict[str, Any]]:
-    restored_users = tables.get("users") or []
+    restored_users = [dict(row) for row in tables.get("users") or []]
+    if not restored_users:
+        raise HTTPException(status_code=400, detail="备份中没有用户数据，无法恢复")
+    admin_user_id = restored_admin_user_id(restored_users, actor)
     for row in restored_users:
-        imported_role = row["role"] if row["id"] == actor.id else "user"
+        imported_role = "admin" if row["id"] == admin_user_id else "user"
+        row["role"] = imported_role
         conn.execute(
             """
             INSERT INTO users (id, username, password_hash, role, created_at, updated_at)
@@ -785,7 +822,10 @@ def restore_backup_tables(conn: Any, tables: dict[str, list[dict[str, Any]]], ac
 
 
 def restore_server_backup_archive(archive_bytes: bytes, response: Response, actor: UserOut) -> None:
+    if len(archive_bytes) > SERVER_BACKUP_MAX_ARCHIVE_BYTES:
+        raise HTTPException(status_code=413, detail="备份文件过大")
     with zipfile.ZipFile(io.BytesIO(archive_bytes), mode="r") as archive:
+        validate_server_backup_archive(archive)
         _, tables, image_files = parse_server_backup_manifest(archive_bytes)
         with tempfile.TemporaryDirectory() as temp_dir_str:
             temp_dir = Path(temp_dir_str)

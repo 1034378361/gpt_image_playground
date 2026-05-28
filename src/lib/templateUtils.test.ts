@@ -37,6 +37,8 @@ function template(overrides: Partial<PromptTemplate> = {}): PromptTemplate {
     coverImageId: null,
     externalCoverUrl: null,
     exampleImages: [],
+    cachedExternalCoverUrl: null,
+    cachedExampleImages: [],
     recommendedChannelId: null,
     recommendedApiMode: null,
     recommendedModel: '',
@@ -116,6 +118,26 @@ describe('template utilities', () => {
       canEdit: true,
       canDelete: true,
     })
+
+    expect(getTemplatePermissions(template({ submissionStatus: 'submitted' }), user({ role: 'reviewer' }))).toMatchObject({
+      isAdmin: false,
+      canReview: true,
+      canEdit: false,
+      canDelete: false,
+      canSubmit: false,
+    })
+
+    expect(getTemplatePermissions(template(), user({ role: 'reviewer' }))).toMatchObject({
+      canReview: false,
+      canEdit: false,
+      canDelete: false,
+    })
+
+    expect(getTemplatePermissions(template({ visibility: 'public', submissionStatus: 'approved' }), user({ role: 'reviewer' }))).toMatchObject({
+      canReview: false,
+      canEdit: true,
+      canDelete: false,
+    })
   })
 
   it('returns template status metadata and cover fallback in a stable order', () => {
@@ -146,6 +168,17 @@ describe('template utilities', () => {
     expect(getTemplateCoverFallback(template({ externalCoverUrl: null, exampleImages: ['https://example.test/fallback.png'] }))).toBe(
       'https://example.test/fallback.png',
     )
+    expect(getTemplateCoverFallback(template({
+      externalCoverUrl: 'https://example.test/cover.png',
+      exampleImages: ['https://example.test/fallback.png'],
+      cachedExternalCoverUrl: '/api/assets/remote-cache/templates/template-a?url=cover',
+      cachedExampleImages: ['/api/assets/remote-cache/templates/template-a?url=fallback'],
+    }))).toBe('/api/assets/remote-cache/templates/template-a?url=cover')
+    expect(getTemplateCoverFallback(template({
+      externalCoverUrl: null,
+      exampleImages: ['https://example.test/fallback.png'],
+      cachedExampleImages: ['/api/assets/remote-cache/templates/template-a?url=fallback'],
+    }))).toBe('/api/assets/remote-cache/templates/template-a?url=fallback')
     expect(getTemplateCoverFallback(template())).toBe('')
   })
 

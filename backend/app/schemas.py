@@ -301,6 +301,8 @@ class PromptTemplatePatch(BaseModel):
 class PromptTemplateOut(PromptTemplateIn):
     id: str
     userId: str
+    cachedExternalCoverUrl: str | None = None
+    cachedExampleImages: list[str] = Field(default_factory=list)
     visibility: TemplateVisibility = "private"
     submissionStatus: TemplateSubmissionStatus = "draft"
     submittedAt: int | None = None
@@ -437,6 +439,7 @@ class OpenPromptPreviewItemOut(BaseModel):
     title: str
     prompt: str
     image: str = ""
+    cachedImage: str = ""
     sourceUrl: str = ""
     sourceAuthor: str = ""
     sourceName: str = ""

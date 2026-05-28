@@ -234,7 +234,7 @@ describe('storeBackend state flows', () => {
     await syncServerData()
 
     const state = useStore.getState()
-    expect(mockedBackendApi.listTemplates).toHaveBeenCalledWith(expect.any(Object), { limit: 80, offset: 0 })
+    expect(mockedBackendApi.listTemplates).toHaveBeenCalledWith(expect.any(Object), { scope: 'all', limit: 80, offset: 0 })
     expect(mockedBackendApi.listGenerations).toHaveBeenCalledWith(expect.any(Object), { limit: 80, offset: 0 })
     expect(state.templates).toEqual([template])
     expect(state.tasks).toEqual([task])
@@ -262,7 +262,7 @@ describe('storeBackend state flows', () => {
 
     await syncServerData()
 
-    expect(mockedBackendApi.listTemplates).toHaveBeenCalledWith(expect.any(Object), { limit: 82, offset: 0 })
+    expect(mockedBackendApi.listTemplates).toHaveBeenCalledWith(expect.any(Object), { scope: 'all', limit: 82, offset: 0 })
     expect(mockedBackendApi.listGenerations).toHaveBeenCalledWith(expect.any(Object), { limit: 81, offset: 0 })
     expect(useStore.getState().templates).toEqual(refreshedTemplates)
     expect(useStore.getState().tasks).toEqual(refreshedTasks)
@@ -302,7 +302,7 @@ describe('storeBackend state flows', () => {
 
     await loadMoreServerTemplates()
 
-    expect(mockedBackendApi.listTemplates).toHaveBeenCalledWith(expect.any(Object), { limit: 80, offset: 1 })
+    expect(mockedBackendApi.listTemplates).toHaveBeenCalledWith(expect.any(Object), { scope: 'all', limit: 80, offset: 1 })
     expect(useStore.getState().templates).toEqual([existingTemplate, nextTemplate])
     expect(useStore.getState().templatePage).toMatchObject({ total: 3, loaded: 2, hasMore: false, loadingMore: false })
 
@@ -310,6 +310,26 @@ describe('storeBackend state flows', () => {
     useStore.setState({ templatePage: { total: 2, loaded: 2, hasMore: false, loadingMore: false } })
     await loadMoreServerTemplates()
     expect(mockedBackendApi.listTemplates).not.toHaveBeenCalled()
+  })
+
+  it('loadMoreServerTemplates uses public scope pagination for public views', async () => {
+    const ownPublicTemplate = { id: 'template-own', title: 'Own', visibility: 'public', submissionStatus: 'approved' } as any
+    const privateTemplate = { id: 'template-private', title: 'Private', visibility: 'private', submissionStatus: 'draft' } as any
+    const nextPublicTemplate = { id: 'template-public-next', title: 'Next public', visibility: 'public', submissionStatus: 'approved' } as any
+    useStore.setState({
+      templates: [ownPublicTemplate, privateTemplate],
+      templateFilters: { ...useStore.getState().templateFilters, scope: 'public' },
+      templatePage: { total: 3, loaded: 1, hasMore: true, loadingMore: false },
+    })
+    mockedBackendApi.listTemplates.mockResolvedValueOnce(
+      pageResult([nextPublicTemplate], { total: 3, offset: 1, hasMore: false }),
+    )
+
+    await loadMoreServerTemplates()
+
+    expect(mockedBackendApi.listTemplates).toHaveBeenCalledWith(expect.any(Object), { scope: 'public', limit: 80, offset: 1 })
+    expect(useStore.getState().templates).toEqual([ownPublicTemplate, privateTemplate, nextPublicTemplate])
+    expect(useStore.getState().templatePage).toMatchObject({ total: 3, loaded: 2, hasMore: false, loadingMore: false })
   })
 
   it('retryTask ignores non-error tasks', async () => {

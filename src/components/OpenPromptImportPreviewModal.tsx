@@ -8,6 +8,7 @@ import {
 } from '../lib/backendApi'
 import { useCloseOnEscape } from '../hooks/useCloseOnEscape'
 import Select from './Select'
+import ImageWithFallback from './ImageWithFallback'
 
 interface Props {
   open: boolean
@@ -309,8 +310,17 @@ export default function OpenPromptImportPreviewModal({ open, source, onClose, li
           ) : visibleItems.length ? (
             <div className="grid gap-2 md:grid-cols-2">
               {visibleItems.map((item) => (
-                <label
+                <div
                   key={item.key}
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => toggleItem(item.key)}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter' || event.key === ' ') {
+                      event.preventDefault()
+                      toggleItem(item.key)
+                    }
+                  }}
                   className={`flex cursor-pointer gap-3 rounded-xl border p-3 transition ${
                     selectedKeys.has(item.key)
                       ? 'border-blue-300 bg-blue-50/80 dark:border-blue-400/40 dark:bg-blue-500/10'
@@ -320,14 +330,16 @@ export default function OpenPromptImportPreviewModal({ open, source, onClose, li
                   <input
                     type="checkbox"
                     checked={selectedKeys.has(item.key)}
+                    onClick={(event) => event.stopPropagation()}
                     onChange={() => toggleItem(item.key)}
                     className="mt-1 h-4 w-4 rounded border-gray-300 text-blue-500 focus:ring-blue-500"
                   />
-                  {item.image ? (
-                    <img
-                      src={item.image}
+                  {(item.cachedImage || item.image) ? (
+                    <ImageWithFallback
+                      src={item.cachedImage || item.image}
                       alt=""
                       className="h-20 w-20 flex-shrink-0 rounded-lg bg-gray-100 object-cover dark:bg-white/[0.06]"
+                      fallbackClassName="flex h-20 w-20 flex-shrink-0 flex-col items-center justify-center gap-1 rounded-lg bg-gray-100 p-1.5 text-center text-[10px] text-gray-400 dark:bg-white/[0.06] dark:text-gray-500"
                       loading="lazy"
                     />
                   ) : (
@@ -357,7 +369,7 @@ export default function OpenPromptImportPreviewModal({ open, source, onClose, li
                       ))}
                     </div>
                   </div>
-                </label>
+                </div>
               ))}
             </div>
           ) : (

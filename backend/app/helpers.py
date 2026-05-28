@@ -9,6 +9,7 @@ from fastapi import HTTPException
 
 from .config import settings
 from .db import get_conn
+from .remote_image_cache import remote_template_cache_url
 from .schemas import (
     AdminApiChannelOut,
     ApiChannelOut,
@@ -247,6 +248,8 @@ def row_to_admin_channel(row: Any) -> AdminApiChannelOut:
 
 def row_to_template(row: Any) -> PromptTemplateOut:
     rating_count = row_int(row, "rating_count")
+    external_cover_url = row_optional(row, "external_cover_url")
+    example_images = row_json(row, "example_images_json", [])
     return PromptTemplateOut(
         id=row["id"],
         userId=row["user_id"],
@@ -262,8 +265,10 @@ def row_to_template(row: Any) -> PromptTemplateOut:
         apiMode=row["api_mode"],
         model=row["model"],
         coverImageId=row["cover_image_id"],
-        externalCoverUrl=row_optional(row, "external_cover_url"),
-        exampleImages=row_json(row, "example_images_json", []),
+        externalCoverUrl=external_cover_url,
+        exampleImages=example_images,
+        cachedExternalCoverUrl=remote_template_cache_url(row["id"], external_cover_url) or None,
+        cachedExampleImages=[remote_template_cache_url(row["id"], url) for url in example_images],
         recommendedChannelId=row_optional(row, "recommended_channel_id") or None,
         recommendedApiMode=row_optional(row, "recommended_api_mode") or None,
         recommendedModel=row_optional(row, "recommended_model", "") or "",

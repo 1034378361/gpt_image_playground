@@ -35,6 +35,7 @@ from ..schemas import (
     UserOut,
 )
 from ..security import new_id, now_ms
+from ..remote_image_cache import remote_open_prompt_cache_url
 from ..helpers import (
     compact_message,
     get_enabled_channel_model,
@@ -904,7 +905,7 @@ def list_templates(
                 """,
                 (user.id, limit, offset),
             ).fetchall()
-        elif scope == "public":
+        elif scope in {"public", "discover"}:
             total = int(
                 conn.execute(
                     """
@@ -1414,15 +1415,21 @@ def list_template_samples(
     with get_conn() as conn:
         rows = conn.execute(
             """
-            SELECT * FROM assets
-            WHERE template_id = ? AND type = 'generated'
-            ORDER BY created_at DESC
-            LIMIT ?
+            SELECT assets.*, task.output_image_ids_json FROM assets
+            JOIN generation_tasks task ON task.id = assets.task_id
+            WHERE assets.template_id = ?
+              AND assets.type = 'generated'
+              AND task.user_id = assets.user_id
+              AND task.template_id = assets.template_id
+              AND task.status = 'done'
+            ORDER BY assets.created_at DESC
             """,
-            (template_id, limit),
+            (template_id,),
         ).fetchall()
         samples: list[TemplateSampleOut] = []
         for asset in rows:
+            if asset["id"] not in {str(asset_id) for asset_id in json_loads(asset["output_image_ids_json"], [])}:
+                continue
             if asset["user_id"] != user.id and user.role != "admin" and not asset_is_publicly_visible(conn, asset):
                 continue
             task = conn.execute("SELECT * FROM generation_tasks WHERE id = ?", (asset["task_id"],)).fetchone() if asset["task_id"] else None
@@ -1459,6 +1466,8 @@ def list_template_samples(
                     createdAt=asset["created_at"],
                 )
             )
+            if len(samples) >= limit:
+                break
     return samples
 
 
@@ -1734,6 +1743,7 @@ async def preview_open_library_templates(
                 title=item["title"],
                 prompt=item["prompt"],
                 image=item["image"],
+                cachedImage=remote_open_prompt_cache_url(prompt_source.id, item["key"], item["image"]),
                 sourceUrl=item["sourceUrl"],
                 sourceAuthor=item["sourceAuthor"],
                 sourceName=item["sourceName"],

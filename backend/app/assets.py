@@ -244,15 +244,21 @@ def generation_payload_from_row(row: Any, user: UserOut) -> GenerateIn:
 
 
 def asset_is_publicly_visible(conn: Any, row: Any) -> bool:
-    if row["template_id"] and row["type"] == "generated":
-        public_template = conn.execute(
+    if row["template_id"] and row["type"] == "generated" and row["task_id"]:
+        public_generation = conn.execute(
             """
-            SELECT 1 FROM prompt_templates
-            WHERE id = ? AND visibility = 'public' AND submission_status = 'approved'
+            SELECT task.output_image_ids_json FROM generation_tasks task
+            JOIN prompt_templates template ON template.id = task.template_id
+            WHERE task.id = ?
+              AND task.user_id = ?
+              AND task.template_id = ?
+              AND task.status = 'done'
+              AND template.visibility = 'public'
+              AND template.submission_status = 'approved'
             """,
-            (row["template_id"],),
+            (row["task_id"], row["user_id"], row["template_id"]),
         ).fetchone()
-        if public_template:
+        if public_generation and row["id"] in {str(asset_id) for asset_id in json_loads(public_generation["output_image_ids_json"], [])}:
             return True
     public_cover = conn.execute(
         """

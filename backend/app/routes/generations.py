@@ -1705,6 +1705,7 @@ def batch_delete_generations(payload: BatchDeleteIn, user: UserOut = Depends(req
 
 @router.post("/api/generations/run", response_model=GenerateRunOut)
 async def run_generation(payload: GenerateIn, user: UserOut = Depends(require_user)) -> GenerateRunOut:
+    assert_generation_not_rate_limited(user.id)
     payload, selected_model, started_at = prepare_generation_request(payload)
     task = persist_generation_submission(
         payload,

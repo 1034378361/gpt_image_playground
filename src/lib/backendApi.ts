@@ -27,7 +27,7 @@ import type {
 } from '../types'
 
 export type OpenPromptLibrarySourceId = 'evolink' | 'zerolu' | 'imgedify' | 'youmind' | 'nanobanana'
-export type TemplateListScope = 'all' | 'mine' | 'public' | 'submissions'
+export type TemplateListScope = 'all' | 'mine' | 'public' | 'discover' | 'submissions'
 
 export interface PageResult<T> {
   items: T[]

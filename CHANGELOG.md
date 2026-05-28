@@ -1,5 +1,27 @@
 # Changelog
 
+## 1.6.2 - 2026-05-28
+
+### Added
+- Add a controlled backend remote-image cache for template, example, and Open Prompt images with SSRF protections, MIME and size validation, cache headers, and bounded local retention.
+- Add image load fallback UI with retry controls for remote template and Open Prompt preview images.
+- Add a dist smoke check to guard against accidental Service Worker registration regressions.
+
+### Changed
+- Remove active Service Worker registration and clean legacy browser CacheStorage entries on startup.
+- Use uv-managed backend test execution and add async pytest support for generation runtime tests.
+- Extend release version checks to cover the NAS single-image env example.
+
+### Fixed
+- Fix deployed `/sw.js` MIME fallback errors by no longer requesting a missing Service Worker file.
+- Fix Open Prompt cached image URLs so they are signed and bound to the preview-time image URL instead of drifting when upstream content changes.
+- Fix reviewer template-review permissions in the frontend to match backend reviewer/admin rules.
+- Fix public/discover template pagination so server pages beyond the initial local window can load.
+- Fix backup restore admin preservation and harden backup import archive limits.
+- Fix queued generation rate limiting for `/api/generations/run` before task persistence.
+- Prevent direct asset uploads or forged generated asset rows from creating public template samples without valid completed task output linkage.
+- Ensure private/review-only remote template images use private cache headers while approved public templates remain immutable public cacheable.
+
 ## 1.6.1 - 2026-05-27
 
 ### Added

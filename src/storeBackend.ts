@@ -15,6 +15,7 @@ import type {
   SystemBackupPreview,
   TaskParams,
   TaskRecord,
+  TemplateFilters,
 } from './types'
 import { DEFAULT_PARAMS, DEFAULT_SETTINGS } from './types'
 import {
@@ -787,6 +788,7 @@ export async function syncServerData() {
     const templateLimit = Math.max(INITIAL_TEMPLATE_LIMIT, currentTemplatePage.loaded, currentTemplates.length)
     const taskLimit = Math.max(INITIAL_TASK_LIMIT, currentTaskPage.loaded, currentTasks.length)
 
+    const templateScope = templateListScopeForFilters(useStore.getState().templateFilters.scope)
     const [
       channels,
       projects,
@@ -797,7 +799,7 @@ export async function syncServerData() {
     ] = await Promise.all([
       backendApi.listChannels(settings),
       backendApi.listProjects(settings),
-      backendApi.listTemplates(settings, { limit: templateLimit, offset: 0 }),
+      backendApi.listTemplates(settings, { scope: templateScope, limit: templateLimit, offset: 0 }),
       backendApi.listGenerations(settings, { limit: taskLimit, offset: 0 }),
       backendApi.listChannelLeaderboard(settings),
       backendApi.getGenerationQueueStats(settings),
@@ -842,6 +844,10 @@ export async function syncServerData() {
   }
 }
 
+function templateListScopeForFilters(scope: TemplateFilters['scope']): backendApi.TemplateListScope {
+  return scope === 'public' || scope === 'discover' ? scope : 'all'
+}
+
 export async function loadMoreServerTasks() {
   const state = useStore.getState()
   if (!state.backendUser || state.taskPage.loadingMore || !state.taskPage.hasMore) return
@@ -872,12 +878,20 @@ export async function loadMoreServerTemplates() {
 
   state.setTemplatePage({ loadingMore: true })
   try {
+    const templateScope = templateListScopeForFilters(state.templateFilters.scope)
+    const loadedInScope = templateScope === 'all'
+      ? state.templates.length
+      : state.templates.filter((template) => template.visibility === 'public' && template.submissionStatus === 'approved').length
     const page = await backendApi.listTemplates(state.settings, {
+      scope: templateScope,
       limit: INITIAL_TEMPLATE_LIMIT,
-      offset: state.templates.length,
+      offset: loadedInScope,
     })
     useStore.getState().appendTemplates(page.items)
-    const loaded = useStore.getState().templates.length
+    const nextState = useStore.getState()
+    const loaded = templateScope === 'all'
+      ? nextState.templates.length
+      : nextState.templates.filter((template) => template.visibility === 'public' && template.submissionStatus === 'approved').length
     useStore.getState().setTemplatePage({
       total: page.total,
       loaded,

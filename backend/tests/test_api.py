@@ -5,6 +5,7 @@ import base64
 import io
 import importlib
 import json
+import socket
 import threading
 import time
 import zipfile
@@ -96,6 +97,46 @@ def mock_open_prompt_readme(monkeypatch, readme: str) -> None:
     monkeypatch.setattr(main.httpx, "AsyncClient", FakeAsyncClient)
 
 
+class FakeRemoteImageResponse:
+    def __init__(self, data: bytes, content_type: str = "image/png", status_code: int = 200):
+        self.status_code = status_code
+        self.headers = {"content-type": content_type, "content-length": str(len(data))}
+        self._data = data
+
+    def to_http_bytes(self) -> bytes:
+        reason = "OK" if self.status_code < 400 else "Error"
+        header_lines = [f"HTTP/1.1 {self.status_code} {reason}"]
+        header_lines.extend(f"{key}: {value}" for key, value in self.headers.items())
+        return ("\r\n".join(header_lines) + "\r\n\r\n").encode("ascii") + self._data
+
+
+class FakeRemoteImageWriter:
+    def write(self, _data: bytes) -> None:
+        pass
+
+    async def drain(self) -> None:
+        pass
+
+    def close(self) -> None:
+        pass
+
+    async def wait_closed(self) -> None:
+        pass
+
+
+class FakeRemoteImageClient:
+    calls = 0
+    response = FakeRemoteImageResponse(PIXEL_PNG)
+
+    @staticmethod
+    async def open_connection(**_kwargs):
+        FakeRemoteImageClient.calls += 1
+        reader = asyncio.StreamReader()
+        reader.feed_data(FakeRemoteImageClient.response.to_http_bytes())
+        reader.feed_eof()
+        return reader, FakeRemoteImageWriter()
+
+
 def template_payload(channel_id: str):
     return {
         "title": "Hero product",
@@ -119,6 +160,19 @@ def template_payload(channel_id: str):
         "linkedTaskIds": [],
         "isFavorite": False,
     }
+
+
+def mock_remote_image_download(monkeypatch, data: bytes = PIXEL_PNG, content_type: str = "image/png") -> type[FakeRemoteImageClient]:
+    import backend.app.remote_image_cache as remote_image_cache
+
+    FakeRemoteImageClient.calls = 0
+    FakeRemoteImageClient.response = FakeRemoteImageResponse(data, content_type)
+    monkeypatch.setattr(remote_image_cache, "_open_connection", FakeRemoteImageClient.open_connection)
+    async def resolve_public_host(_hostname):
+        return [(socket.AF_INET, socket.SOCK_STREAM, 0, "", ("93.184.216.34", 443))]
+
+    monkeypatch.setattr(remote_image_cache, "_resolve_addresses", resolve_public_host)
+    return FakeRemoteImageClient
 
 
 def wait_for_task(client: TestClient, task_id: str, timeout: float = 3.0):
@@ -654,7 +708,6 @@ def test_asset_upload_read_delete(monkeypatch, tmp_path):
     upload = client.post(
         "/api/assets",
         files={"file": ("pixel.png", PIXEL_PNG, "image/png")},
-        data={"type": "generated"},
     )
     assert upload.status_code == 200
     asset = upload.json()
@@ -680,6 +733,266 @@ def test_asset_upload_read_delete(monkeypatch, tmp_path):
     deleted = client.delete(f"/api/assets/{asset['id']}")
     assert deleted.status_code == 200
     assert client.get(f"/api/assets/{asset['id']}").status_code == 404
+
+
+def test_asset_upload_rejects_trusted_metadata(monkeypatch, tmp_path):
+    client = make_client(monkeypatch, tmp_path)
+
+    register(client)
+
+    forged = client.post(
+        "/api/assets",
+        files={"file": ("pixel.png", PIXEL_PNG, "image/png")},
+        data={"type": "generated", "taskId": "fake-task", "templateId": "fake-template"},
+    )
+
+    assert forged.status_code == 400
+
+
+def test_template_remote_image_cache_is_allowlisted_and_reused(monkeypatch, tmp_path):
+    client = make_client(monkeypatch, tmp_path)
+    register(client)
+    channel = create_channel(client)
+    client.post("/api/auth/logout")
+    register(client, "bob")
+    fake_client = mock_remote_image_download(monkeypatch)
+
+    payload = template_payload(channel["id"])
+    payload["externalCoverUrl"] = "https://cdn.example.test/cover.png"
+    created = client.post("/api/templates", json=payload)
+    assert created.status_code == 200
+    template = created.json()
+    cache_url = template["cachedExternalCoverUrl"]
+    assert cache_url.startswith(f"/api/assets/remote-cache/templates/{template['id']}?url=")
+
+    first = client.get(cache_url)
+    assert first.status_code == 200
+    assert first.content == PIXEL_PNG
+    assert first.headers["cache-control"] == "private, no-store"
+    assert fake_client.calls == 1
+    assert (tmp_path / "data" / "assets" / "remote-cache").exists()
+
+    second = client.get(cache_url)
+    assert second.status_code == 200
+    assert second.content == PIXEL_PNG
+    assert second.headers["cache-control"] == "private, no-store"
+    assert fake_client.calls == 1
+
+    from backend.app.db import get_conn
+
+    with get_conn() as conn:
+        conn.execute(
+            "UPDATE prompt_templates SET visibility = 'public', submission_status = 'approved' WHERE id = ?",
+            (template["id"],),
+        )
+
+    public = client.get(cache_url)
+    assert public.status_code == 200
+    assert public.headers["cache-control"] == "public, max-age=31536000, immutable"
+    assert fake_client.calls == 1
+
+    blocked = client.get(f"/api/assets/remote-cache/templates/{template['id']}?url=https://evil.example.test/other.png")
+    assert blocked.status_code == 404
+
+
+def test_remote_image_cache_prunes_old_files_over_size_limit(monkeypatch, tmp_path):
+    client = make_client(monkeypatch, tmp_path)
+    register(client)
+    channel = create_channel(client)
+
+    import backend.app.config as config
+    import backend.app.remote_image_cache as remote_image_cache
+
+    monkeypatch.setattr(config.settings, "remote_image_cache_max_bytes", len(PIXEL_PNG) + 10)
+    fake_client = mock_remote_image_download(monkeypatch)
+
+    first_payload = template_payload(channel["id"])
+    first_payload["externalCoverUrl"] = "https://cdn.example.test/prune-first.png"
+    first_template = client.post("/api/templates", json=first_payload).json()
+    assert client.get(first_template["cachedExternalCoverUrl"]).status_code == 200
+    first_path = remote_image_cache._cache_path("https://cdn.example.test/prune-first.png", ".png")
+    assert first_path.exists()
+
+    second_payload = template_payload(channel["id"])
+    second_payload["title"] = "Second remote image"
+    second_payload["externalCoverUrl"] = "https://cdn.example.test/prune-second.png"
+    second_template = client.post("/api/templates", json=second_payload).json()
+    assert client.get(second_template["cachedExternalCoverUrl"]).status_code == 200
+    second_path = remote_image_cache._cache_path("https://cdn.example.test/prune-second.png", ".png")
+
+    assert fake_client.calls == 2
+    assert not first_path.exists()
+    assert second_path.exists()
+
+
+def test_remote_image_cache_rejects_unsafe_hosts_and_payloads(monkeypatch, tmp_path):
+    client = make_client(monkeypatch, tmp_path)
+    register(client)
+    channel = create_channel(client)
+
+    localhost_payload = template_payload(channel["id"])
+    localhost_payload["externalCoverUrl"] = "http://127.0.0.1/cover.png"
+    localhost_template = client.post("/api/templates", json=localhost_payload).json()
+    localhost = client.get(localhost_template["cachedExternalCoverUrl"])
+    assert localhost.status_code == 400
+
+    bad_type_payload = template_payload(channel["id"])
+    bad_type_payload["title"] = "Bad type"
+    bad_type_payload["externalCoverUrl"] = "https://cdn.example.test/bad.txt"
+    bad_type_template = client.post("/api/templates", json=bad_type_payload).json()
+    mock_remote_image_download(monkeypatch, b"not image", "text/plain")
+    bad_type = client.get(bad_type_template["cachedExternalCoverUrl"])
+    assert bad_type.status_code == 415
+
+    huge_payload = template_payload(channel["id"])
+    huge_payload["title"] = "Huge image"
+    huge_payload["externalCoverUrl"] = "https://cdn.example.test/huge.png"
+    huge_template = client.post("/api/templates", json=huge_payload).json()
+    mock_remote_image_download(monkeypatch, b"x" * (10 * 1024 * 1024 + 1), "image/png")
+    huge = client.get(huge_template["cachedExternalCoverUrl"])
+    assert huge.status_code == 413
+
+
+def test_remote_image_cache_uses_current_asset_dir_after_reload(monkeypatch, tmp_path):
+    first_client = make_client(monkeypatch, tmp_path / "first")
+    register(first_client)
+    first_channel = create_channel(first_client)
+    first_fake = mock_remote_image_download(monkeypatch)
+
+    first_payload = template_payload(first_channel["id"])
+    first_payload["externalCoverUrl"] = "https://cdn.example.test/first.png"
+    first_template = first_client.post("/api/templates", json=first_payload).json()
+    assert first_client.get(first_template["cachedExternalCoverUrl"]).status_code == 200
+    assert first_fake.calls == 1
+
+    second_client = make_client(monkeypatch, tmp_path / "second")
+    register(second_client)
+    second_channel = create_channel(second_client)
+    second_fake = mock_remote_image_download(monkeypatch)
+
+    second_payload = template_payload(second_channel["id"])
+    second_payload["externalCoverUrl"] = "https://cdn.example.test/second.png"
+    second_template = second_client.post("/api/templates", json=second_payload).json()
+    assert second_client.get(second_template["cachedExternalCoverUrl"]).status_code == 200
+
+    assert second_fake.calls == 1
+    assert (tmp_path / "second" / "data" / "assets" / "remote-cache").exists()
+
+
+def test_remote_image_cache_handles_chunked_responses(monkeypatch, tmp_path):
+    client = make_client(monkeypatch, tmp_path)
+    register(client)
+    channel = create_channel(client)
+
+    payload = template_payload(channel["id"])
+    payload["externalCoverUrl"] = "https://cdn.example.test/chunked.png"
+    created = client.post("/api/templates", json=payload)
+    assert created.status_code == 200
+    cache_url = created.json()["cachedExternalCoverUrl"]
+
+    import backend.app.remote_image_cache as remote_image_cache
+
+    async def resolve_public_host(_hostname):
+        return [(socket.AF_INET, socket.SOCK_STREAM, 0, "", ("93.184.216.34", 443))]
+
+    monkeypatch.setattr(remote_image_cache, "_resolve_addresses", resolve_public_host)
+
+    async def open_chunked_connection(**_kwargs):
+        reader = asyncio.StreamReader()
+        reader.feed_data(
+            b"HTTP/1.1 200 OK\r\nContent-Type: image/png\r\nTransfer-Encoding: chunked\r\n\r\n"
+            + f"{len(PIXEL_PNG):x}".encode("ascii")
+            + b"\r\n"
+            + PIXEL_PNG
+            + b"\r\n0\r\n\r\n"
+        )
+        reader.feed_eof()
+        return reader, FakeRemoteImageWriter()
+
+    monkeypatch.setattr(remote_image_cache, "_open_connection", open_chunked_connection)
+    cached = client.get(cache_url)
+    assert cached.status_code == 200
+    assert cached.content == PIXEL_PNG
+
+    payload["title"] = "Bad chunk metadata"
+    payload["externalCoverUrl"] = "https://cdn.example.test/bad-chunk.png"
+    bad_template = client.post("/api/templates", json=payload).json()
+
+    async def open_bad_chunked_connection(**_kwargs):
+        reader = asyncio.StreamReader()
+        reader.feed_data(
+            b"HTTP/1.1 200 OK\r\nContent-Type: image/png\r\nTransfer-Encoding: chunked\r\n\r\n"
+            + b"f" * 5000
+        )
+        reader.feed_eof()
+        return reader, FakeRemoteImageWriter()
+
+    monkeypatch.setattr(remote_image_cache, "_open_connection", open_bad_chunked_connection)
+    rejected = client.get(bad_template["cachedExternalCoverUrl"])
+    assert rejected.status_code == 502
+
+
+def test_open_prompt_remote_cache_url_is_bound_to_preview_image(monkeypatch, tmp_path):
+    client = make_client(monkeypatch, tmp_path)
+    register(client)
+    create_channel(client)
+
+    readme = """
+### Test Product Ad
+<img width="500" alt="image" src="assets/test-product.jpg" />
+
+**Prompt:**
+```text
+A premium test product on a clean studio background
+```
+**Source:** [@tester](https://x.com/tester/status/1)
+"""
+    fetched_readme = readme
+
+    import backend.app.routes.templates as templates_mod
+    import backend.app.remote_image_cache as remote_image_cache
+
+    class FakeOpenPromptClient:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def get(self, url):
+            request = httpx.Request("GET", url)
+            return httpx.Response(200, text=fetched_readme, request=request)
+
+    FakeRemoteImageClient.calls = 0
+    FakeRemoteImageClient.response = FakeRemoteImageResponse(PIXEL_PNG)
+    monkeypatch.setattr(templates_mod.httpx, "AsyncClient", FakeOpenPromptClient)
+    monkeypatch.setattr(remote_image_cache, "_open_connection", FakeRemoteImageClient.open_connection)
+    async def resolve_public_host(_hostname):
+        return [(socket.AF_INET, socket.SOCK_STREAM, 0, "", ("93.184.216.34", 443))]
+
+    monkeypatch.setattr(remote_image_cache, "_resolve_addresses", resolve_public_host)
+
+    preview = client.get("/api/admin/templates/import-open-library/preview?source=zerolu&limit=1")
+    assert preview.status_code == 200
+    item = preview.json()["items"][0]
+    assert item["cachedImage"].startswith("/api/assets/remote-cache/open-prompt/zerolu/")
+    assert "url=https%3A%2F%2Fraw.githubusercontent.com" in item["cachedImage"]
+    assert "sig=" in item["cachedImage"]
+
+    fetched_readme = readme.replace("assets/test-product.jpg", "assets/changed-product.jpg")
+    cached = client.get(item["cachedImage"])
+    assert cached.status_code == 200
+    assert cached.content == PIXEL_PNG
+    assert cached.headers["cache-control"] == "public, max-age=31536000, immutable"
+
+    tampered = client.get(item["cachedImage"].replace("test-product.jpg", "changed-product.jpg"))
+    assert tampered.status_code == 404
+
+    missing = client.get("/api/assets/remote-cache/open-prompt/zerolu/not-a-real-key")
+    assert missing.status_code == 422
 
 
 def test_async_generation_run_persists_task_assets_and_metadata(monkeypatch, tmp_path):
@@ -859,7 +1172,6 @@ def test_admin_can_export_and_import_server_backup(monkeypatch, tmp_path):
     upload = client.post(
         "/api/assets",
         files={"file": ("pixel.png", PIXEL_PNG, "image/png")},
-        data={"type": "generated"},
     )
     assert upload.status_code == 200
     asset = upload.json()
@@ -912,7 +1224,42 @@ def test_admin_can_export_and_import_server_backup(monkeypatch, tmp_path):
     assert restored_asset.content == PIXEL_PNG
 
 
-def test_failed_backup_import_keeps_existing_assets(monkeypatch, tmp_path):
+def test_backup_import_preserves_admin_when_actor_is_not_in_backup(monkeypatch, tmp_path):
+    client = make_client(monkeypatch, tmp_path)
+
+    register(client)
+    exported = client.get("/api/admin/system/export")
+    assert exported.status_code == 200
+
+    with zipfile.ZipFile(io.BytesIO(exported.content)) as source_archive:
+        manifest = json.loads(source_archive.read("server-backup.json").decode("utf-8"))
+        manifest["tables"]["users"][0]["id"] = "restored-admin-id"
+        manifest["tables"]["users"][0]["username"] = "restored-admin"
+
+        backup_buffer = io.BytesIO()
+        with zipfile.ZipFile(backup_buffer, mode="w", compression=zipfile.ZIP_DEFLATED) as backup_archive:
+            for name in source_archive.namelist():
+                if name == "server-backup.json":
+                    backup_archive.writestr(name, json.dumps(manifest))
+                else:
+                    backup_archive.writestr(name, source_archive.read(name))
+
+    imported = client.post(
+        "/api/admin/system/import",
+        files={"file": ("backup.zip", backup_buffer.getvalue(), "application/zip")},
+    )
+    assert imported.status_code == 200
+
+    me = client.get("/api/auth/me")
+    assert me.status_code == 200
+    assert me.json()["role"] == "admin"
+
+    users = client.get("/api/admin/users")
+    assert users.status_code == 200
+    assert any(user["role"] == "admin" for user in users.json())
+
+
+def test_backup_import_rolls_back_when_asset_file_is_missing(monkeypatch, tmp_path):
     client = make_client(monkeypatch, tmp_path)
 
     register(client)
@@ -921,7 +1268,6 @@ def test_failed_backup_import_keeps_existing_assets(monkeypatch, tmp_path):
     upload = client.post(
         "/api/assets",
         files={"file": ("pixel.png", PIXEL_PNG, "image/png")},
-        data={"type": "generated"},
     )
     assert upload.status_code == 200
     asset = upload.json()
@@ -949,6 +1295,35 @@ def test_failed_backup_import_keeps_existing_assets(monkeypatch, tmp_path):
     restored_asset = client.get(f"/api/assets/{asset['id']}")
     assert restored_asset.status_code == 200
     assert restored_asset.content == PIXEL_PNG
+
+
+def test_backup_import_rejects_unsafe_or_oversized_archives(monkeypatch, tmp_path):
+    client = make_client(monkeypatch, tmp_path)
+    register(client)
+
+    import backend.app.routes.admin as admin_mod
+
+    traversal_buffer = io.BytesIO()
+    with zipfile.ZipFile(traversal_buffer, mode="w", compression=zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("server-backup.json", json.dumps({"tables": {"users": []}, "imageFiles": {}}))
+        archive.writestr("../evil.png", PIXEL_PNG)
+
+    traversal = client.post(
+        "/api/admin/system/import-preview",
+        files={"file": ("backup.zip", traversal_buffer.getvalue(), "application/zip")},
+    )
+    assert traversal.status_code == 400
+
+    monkeypatch.setattr(admin_mod, "SERVER_BACKUP_MAX_UNCOMPRESSED_BYTES", 10)
+    oversized_buffer = io.BytesIO()
+    with zipfile.ZipFile(oversized_buffer, mode="w", compression=zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("server-backup.json", json.dumps({"tables": {"users": []}, "imageFiles": {}}))
+
+    oversized = client.post(
+        "/api/admin/system/import-preview",
+        files={"file": ("backup.zip", oversized_buffer.getvalue(), "application/zip")},
+    )
+    assert oversized.status_code == 413
 
 
 def test_generation_queue_stats_counts_user_and_global(monkeypatch, tmp_path):
@@ -1032,7 +1407,40 @@ def test_reviewer_can_review_templates_but_cannot_manage_system(monkeypatch, tmp
     assert demoted.status_code == 400
 
 
-def test_queued_generation_survives_restart_and_rehydrates_inputs(monkeypatch, tmp_path):
+def test_async_generation_run_is_rate_limited(monkeypatch, tmp_path):
+    client = make_client(monkeypatch, tmp_path)
+    import backend.app.db as db
+    import backend.app.routes.generations as generations
+
+    user = register(client)
+    channel = create_channel(client)
+    rate_limit_globals = generations.assert_generation_not_rate_limited.__globals__
+    rate_limit_state = rate_limit_globals["GENERATION_ATTEMPTS"]
+    rate_limit_now_ms = rate_limit_globals["now_ms"]
+    monkeypatch.setattr(rate_limit_globals["settings"], "generation_rate_limit", 1)
+    rate_limit_state.clear()
+    rate_limit_state[user["id"]].append(rate_limit_now_ms())
+    monkeypatch.setattr("backend.app.routes.generations.ensure_generation_workers", lambda: None)
+
+    blocked = client.post(
+        "/api/generations/run",
+        json={
+            "channelId": channel["id"],
+            "model": "gpt-image-2",
+            "prompt": "A bottle on a clean white background",
+            "params": template_payload(channel["id"])["params"],
+            "inputImageDataUrls": [],
+            "maskDataUrl": None,
+        },
+    )
+
+    assert blocked.status_code == 429
+    with db.get_conn() as conn:
+        count = conn.execute("SELECT COUNT(*) FROM generation_tasks WHERE user_id = ?", (user["id"],)).fetchone()[0]
+    assert count == 0
+
+
+def test_queued_generation_recovers_after_restart(monkeypatch, tmp_path):
     import backend.app.routes.generations as generations
     _real_ensure_workers = generations.ensure_generation_workers
 
@@ -1530,6 +1938,76 @@ def test_user_template_submission_can_be_approved_to_public(monkeypatch, tmp_pat
     assert approved_body["visibility"] == "public"
     assert approved_body["submissionStatus"] == "approved"
     assert approved_body["reviewedBy"] == admin["id"]
+
+
+def test_forged_generated_asset_is_not_public_template_sample(monkeypatch, tmp_path):
+    client = make_client(monkeypatch, tmp_path)
+    admin = register(client)
+    channel = create_channel(client)
+
+    client.post("/api/auth/logout")
+    bob = client.post("/api/auth/register", json={"username": "bob", "password": "password123"}).json()
+    created = client.post("/api/templates", json=template_payload(channel["id"]))
+    assert created.status_code == 200
+    template = created.json()
+    assert client.post(f"/api/templates/{template['id']}/submit").status_code == 200
+
+    upload = client.post("/api/assets", files={"file": ("pixel.png", PIXEL_PNG, "image/png")})
+    assert upload.status_code == 200
+    forged_asset_id = upload.json()["id"]
+
+    from backend.app.db import get_conn
+
+    with get_conn() as conn:
+        task_id = "forged-task"
+        conn.execute(
+            """
+            INSERT INTO generation_tasks (
+              id, user_id, prompt, params_json, input_image_ids_json, mask_target_image_id, mask_image_id,
+              output_image_ids_json, actual_params_json, actual_params_by_image_json, revised_prompt_by_image_json,
+              status, error, created_at, finished_at, elapsed, is_favorite, diagnostics_json, channel_id, api_mode, model
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                task_id,
+                bob["id"],
+                "forged task",
+                json.dumps(template_payload(channel["id"])["params"]),
+                "[]",
+                None,
+                None,
+                "[]",
+                None,
+                None,
+                None,
+                "done",
+                None,
+                1,
+                2,
+                1,
+                0,
+                "[]",
+                channel["id"],
+                "images",
+                "gpt-image-2",
+            ),
+        )
+        conn.execute(
+            "UPDATE assets SET type = 'generated', task_id = ?, template_id = ? WHERE id = ?",
+            (task_id, template["id"], forged_asset_id),
+        )
+
+    client.post("/api/auth/logout")
+    login(client, admin["username"])
+    approved = client.post(f"/api/admin/template-submissions/{template['id']}/approve")
+    assert approved.status_code == 200
+
+    exposed_asset = client.get(f"/api/assets/{forged_asset_id}")
+    assert exposed_asset.status_code == 404
+
+    samples = client.get(f"/api/templates/{template['id']}/samples")
+    assert samples.status_code == 200
+    assert all(item["imageId"] != forged_asset_id for item in samples.json())
 
 
 def test_template_gallery_versions_rating_pack_similarity_and_leaderboard(monkeypatch, tmp_path):

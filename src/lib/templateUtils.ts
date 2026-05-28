@@ -83,7 +83,7 @@ export function getTemplatePermissions(
     && template.submissionStatus !== 'submitted'
     && template.submissionStatus !== 'approved'
   )
-  const canReview = Boolean(isAdmin && template.submissionStatus === 'submitted')
+  const canReview = Boolean((isAdmin || backendUser?.role === 'reviewer') && template.submissionStatus === 'submitted')
 
   return {
     isOwner,
@@ -111,8 +111,10 @@ export function getTemplateStatusMeta(template: Pick<PromptTemplate, 'visibility
   return { kind: 'private' as const, shortLabel: '私有', longLabel: '私有模板' }
 }
 
-export function getTemplateCoverFallback(template: Pick<PromptTemplate, 'externalCoverUrl' | 'exampleImages'>): string {
-  return template.externalCoverUrl || template.exampleImages[0] || ''
+export function getTemplateCoverFallback(
+  template: Pick<PromptTemplate, 'externalCoverUrl' | 'exampleImages' | 'cachedExternalCoverUrl' | 'cachedExampleImages'>,
+): string {
+  return template.cachedExternalCoverUrl || template.cachedExampleImages?.[0] || template.externalCoverUrl || template.exampleImages[0] || ''
 }
 
 export function normalizeTemplateTags(tags: string[] | string): string[] {

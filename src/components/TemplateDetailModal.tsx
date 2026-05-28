@@ -8,6 +8,7 @@ import { getTemplateCoverFallback, getTemplatePermissions, getTemplateStatusMeta
 import { useCloseOnEscape } from '../hooks/useCloseOnEscape'
 import { useTemplateActionHelpers } from '../hooks/useTemplateActionHelpers'
 import { useCachedImageMap } from '../hooks/useCachedImageMap'
+import ImageWithFallback from './ImageWithFallback'
 
 export default function TemplateDetailModal() {
   const templates = useStore((s) => s.templates)
@@ -96,7 +97,13 @@ export default function TemplateDetailModal() {
   const coverSrc = template.coverImageId
     ? imageSrcs[template.coverImageId] || getTemplateCoverFallback(template)
     : getTemplateCoverFallback(template)
-  const exampleImages = [...new Set([coverSrc, ...(template.exampleImages ?? [])].filter(Boolean))]
+  const exampleImageItems = [...new Map([
+    coverSrc ? [coverSrc, { src: coverSrc, openSrc: template.externalCoverUrl || coverSrc }] : null,
+    ...template.exampleImages.map((url, index) => {
+      const src = template.cachedExampleImages?.[index] || url
+      return [src, { src, openSrc: url }]
+    }),
+  ].filter(Boolean) as Array<[string, { src: string; openSrc: string }]>).values()]
   const useCount = Math.max(template.usageCount ?? 0, linkedTasks.length)
 
   const handleDelete = () => {
@@ -157,11 +164,12 @@ export default function TemplateDetailModal() {
       >
         <div className="md:w-[42%] w-full h-64 md:h-auto bg-gray-100 dark:bg-black/20 relative flex items-center justify-center flex-shrink-0 min-h-[16rem]">
           {coverSrc ? (
-            <img
+            <ImageWithFallback
               src={coverSrc}
               data-image-id={template.coverImageId ?? undefined}
               data-template-id={template.id}
               className="max-w-[calc(100%-2rem)] max-h-[calc(100%-2rem)] object-contain cursor-pointer"
+              fallbackClassName="flex h-full w-full flex-col items-center justify-center gap-2 p-4 text-center text-sm text-gray-300 dark:text-gray-600"
               onClick={() => {
                 if (template.coverImageId) {
                   setLightboxImageId(template.coverImageId, [template.coverImageId])
@@ -304,19 +312,32 @@ export default function TemplateDetailModal() {
               </div>
             </div>
 
-            {exampleImages.length > 0 && (
+            {exampleImageItems.length > 0 && (
               <div className="mb-4">
                 <h3 className="text-xs font-medium text-gray-400 dark:text-gray-500 uppercase tracking-wider mb-2">示例图</h3>
                 <div className="grid grid-cols-3 sm:grid-cols-6 gap-2">
-                  {exampleImages.slice(0, 12).map((src) => (
-                    <button
-                      key={src}
-                      type="button"
-                      onClick={() => window.open(src, '_blank', 'noopener,noreferrer')}
-                      className="aspect-square overflow-hidden rounded-lg border border-gray-200 bg-gray-100 transition hover:opacity-90 dark:border-white/[0.08] dark:bg-black/20"
+                  {exampleImageItems.slice(0, 12).map((item) => (
+                    <div
+                      key={item.src}
+                      className="aspect-square overflow-hidden rounded-lg border border-gray-200 bg-gray-100 transition dark:border-white/[0.08] dark:bg-black/20"
                     >
-                      <img src={src} className="h-full w-full object-cover" alt="" loading="lazy" />
-                    </button>
+                      <ImageWithFallback
+                        src={item.src}
+                        className="h-full w-full cursor-pointer object-cover transition hover:opacity-90"
+                        fallbackClassName="flex h-full w-full flex-col items-center justify-center gap-1.5 p-2 text-center text-[11px] text-gray-400 dark:text-gray-500"
+                        alt=""
+                        loading="lazy"
+                        role="button"
+                        tabIndex={0}
+                        onClick={() => window.open(item.openSrc, '_blank', 'noopener,noreferrer')}
+                        onKeyDown={(event) => {
+                          if (event.key === 'Enter' || event.key === ' ') {
+                            event.preventDefault()
+                            window.open(item.openSrc, '_blank', 'noopener,noreferrer')
+                          }
+                        }}
+                      />
+                    </div>
                   ))}
                 </div>
               </div>

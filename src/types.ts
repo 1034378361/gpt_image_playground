@@ -222,6 +222,8 @@ export interface PromptTemplate {
   coverImageId?: string | null
   externalCoverUrl?: string | null
   exampleImages: string[]
+  cachedExternalCoverUrl?: string | null
+  cachedExampleImages?: string[]
   recommendedChannelId?: string | null
   recommendedApiMode?: ApiMode | null
   recommendedModel?: string
@@ -309,6 +311,7 @@ export interface OpenPromptPreviewItem {
   title: string
   prompt: string
   image: string
+  cachedImage?: string
   sourceUrl: string
   sourceAuthor: string
   sourceName: string

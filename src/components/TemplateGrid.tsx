@@ -86,7 +86,7 @@ export default function TemplateGrid() {
   }, [filteredTemplates.length, filters])
 
   const canAutoLoadServerTemplates =
-    filters.scope === 'all'
+    (filters.scope === 'all' || filters.scope === 'public' || filters.scope === 'discover')
     && !currentProjectId
     && !filters.query.trim()
     && !filters.favoriteOnly

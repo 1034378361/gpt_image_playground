@@ -91,7 +91,7 @@
 <details>
 <summary><strong>▲ 方式一：Vercel 部署前端壳 + 自己提供同源后端</strong></summary>
 
-[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2FCookSleep%2Fgpt_image_playground&project-name=gpt-image-playground&repository-name=gpt-image-playground)
+[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2F1034378361%2Fgpt_image_playground&project-name=gpt-image-playground&repository-name=gpt-image-playground)
 
 点击上方按钮后，Vercel 只会构建并托管前端静态资源。你仍然必须额外提供 FastAPI 后端，并把站点的 `/api/*` 反向代理到后端服务，否则页面会直接提示“当前部署缺少后端”。
 

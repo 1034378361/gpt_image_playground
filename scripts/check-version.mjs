@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 const rootDir = process.cwd()
@@ -15,6 +15,8 @@ if (!packageVersion) {
 
 assertEqual('package-lock.json version', lockVersion, packageVersion)
 assertEqual('package-lock root package version', lockRootVersion, packageVersion)
+assertEnvVersion('deploy/fnnas.single.env.example', 'GIP_IMAGE_TAG', packageVersion)
+assertEnvVersion('deploy/fnnas.single.env.example', 'GIP_IMAGE_BUILD_VERSION', packageVersion)
 
 if (tagVersion) {
   assertEqual('release tag version', tagVersion, packageVersion)
@@ -32,6 +34,17 @@ function normalizeTagVersion(value) {
   const tag = raw.startsWith('refs/tags/') ? raw.slice('refs/tags/'.length) : raw
   if (!tag.startsWith('v')) return ''
   return tag.slice(1)
+}
+
+function assertEnvVersion(relativePath, key, expected) {
+  const filePath = join(rootDir, relativePath)
+  if (!existsSync(filePath)) return
+  const lines = readFileSync(filePath, 'utf8').split(/\r?\n/)
+  const line = lines.find((item) => item.startsWith(`${key}=`))
+  if (!line) {
+    fail(`${relativePath} is missing ${key}`)
+  }
+  assertEqual(`${relativePath} ${key}`, line.slice(key.length + 1).trim(), expected)
 }
 
 function assertEqual(label, actual, expected) {

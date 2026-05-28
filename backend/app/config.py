@@ -24,6 +24,7 @@ class Settings:
         self.restore_point_retention = max(1, int(os.getenv("GIP_RESTORE_POINT_RETENTION", "10")))
         self.max_upload_bytes = int(os.getenv("GIP_MAX_UPLOAD_BYTES", str(25 * 1024 * 1024)))
         self.thumbnail_max_size = int(os.getenv("GIP_THUMBNAIL_MAX_SIZE", "512"))
+        self.remote_image_cache_max_bytes = max(0, int(os.getenv("GIP_REMOTE_IMAGE_CACHE_MAX_BYTES", str(1024 * 1024 * 1024))))
         self.cors_origins = [
             origin.strip()
             for origin in os.getenv("GIP_CORS_ORIGINS", "http://127.0.0.1:5173,http://localhost:5173").split(",")
