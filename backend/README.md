@@ -24,7 +24,7 @@ The Vite dev server proxies `/api/*` to `http://127.0.0.1:8000`.
 - `GIP_RESTORE_POINT_DIR`: automatic restore-point archive directory, defaults to `backend/data/restore-points`.
 - `GIP_FRONTEND_DIST_DIR`: built frontend bundle directory served as SPA fallback, defaults to `<repo>/dist`.
 - `GIP_SESSION_COOKIE`: session cookie name, defaults to `gip_session`.
-- `GIP_SESSION_SECURE`: set to `true` behind HTTPS.
+- `GIP_SESSION_SECURE`: HTTPS cookie flag, defaults to `true`; set `false` only for trusted HTTP-only LAN deployments.
 - `GIP_SESSION_TTL_SECONDS`: session lifetime in seconds, defaults to `604800` (7 days).
 - `GIP_RESTORE_POINT_RETENTION`: how many automatic restore-point archives to keep, defaults to `10`.
 - `GIP_MAX_UPLOAD_BYTES`: per-request upload size cap in bytes, defaults to `26214400` (25 MiB).

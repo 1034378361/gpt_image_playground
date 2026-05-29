@@ -5,6 +5,7 @@ import { moveTasksToProject, setTaskFavorite } from '../storeTaskMutations'
 import { refreshGenerationPreflight, submitTask, cancelMultipleTasks } from '../storeBackend'
 import { DEFAULT_PARAMS } from '../types'
 import { createMaskPreviewDataUrl } from '../lib/canvasImage'
+import { shouldCollapseComposer } from '../lib/composerCollapse'
 import { canManageSystem } from '../lib/roles'
 import SizePickerModal from './SizePickerModal'
 import ExperimentLabModal from './ExperimentLabModal'
@@ -252,6 +253,7 @@ export default function InputBar() {
   const previousHasAnySelection = useRef(false)
   const suppressDesktopHoverReveal = useRef(false)
   const skipTransition = useRef(false)
+  const isPromptComposingRef = useRef(false)
   const hasAnySelection = selectedTaskIds.length > 0 || selectedTemplateIds.length > 0
   if (hasAnySelection) {
     hadSelection.current = true
@@ -647,6 +649,7 @@ export default function InputBar() {
   }, [adjustTextareaHeight])
 
   useEffect(() => {
+    isPromptComposingRef.current = false
     if (isMobile) {
       setDesktopManualOpen(false)
       setDesktopFocused(false)
@@ -722,11 +725,21 @@ export default function InputBar() {
     if (isMobile) return
     window.requestAnimationFrame(() => {
       const dock = dockStackRef.current
-      if (!dock?.contains(document.activeElement)) {
+      const hasFocusInside = Boolean(dock?.contains(document.activeElement))
+      if (shouldCollapseComposer({ isMobile, hasFocusInside, isComposingPrompt: isPromptComposingRef.current })) {
         setDesktopFocused(false)
         setDesktopManualOpen(false)
       }
     })
+  }, [isMobile])
+
+  const closeDesktopComposerIfIdle = useCallback(() => {
+    const dock = dockStackRef.current
+    const hasFocusInside = Boolean(dock?.contains(document.activeElement))
+    if (!shouldCollapseComposer({ isMobile, hasFocusInside, isComposingPrompt: isPromptComposingRef.current })) return
+    suppressDesktopHoverReveal.current = false
+    setDesktopFocused(false)
+    setDesktopManualOpen(false)
   }, [isMobile])
 
   useEffect(() => {
@@ -838,17 +851,9 @@ export default function InputBar() {
 
           <div
             ref={dockStackRef}
+            data-composer-dock
             className={`pointer-events-auto ease-out will-change-transform ${skipTransition.current ? '' : 'transition-transform duration-300'}`}
-            onMouseLeave={() => {
-              if (!isMobile) {
-                suppressDesktopHoverReveal.current = false
-                setDesktopManualOpen(false)
-                setDesktopFocused(false)
-                if (dockStackRef.current?.contains(document.activeElement)) {
-                  ;(document.activeElement as HTMLElement).blur()
-                }
-              }
-            }}
+            onMouseLeave={closeDesktopComposerIfIdle}
             onFocusCapture={() => !isMobile && setDesktopFocused(true)}
             onBlurCapture={handleDesktopBlurCapture}
             style={
@@ -1078,6 +1083,12 @@ export default function InputBar() {
             value={prompt}
             onChange={(e) => setPrompt(e.target.value)}
             onKeyDown={handleKeyDown}
+            onCompositionStart={() => {
+              isPromptComposingRef.current = true
+            }}
+            onCompositionEnd={() => {
+              isPromptComposingRef.current = false
+            }}
             rows={1}
             placeholder="描述你想生成的图片..."
             className="w-full px-4 py-3 rounded-2xl border border-gray-200/60 dark:border-white/[0.08] bg-white/50 dark:bg-white/[0.03] text-sm focus:outline-none leading-relaxed resize-none shadow-sm transition-[border-color,box-shadow] duration-200"

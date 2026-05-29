@@ -12,3 +12,7 @@ __pycache__/
 .tmp-*.tar*
 deploy/single-image-build.json
 .remember/test-results/
+test-results/
+.playwright-mcp/
+.serena/
+.agentdocs/

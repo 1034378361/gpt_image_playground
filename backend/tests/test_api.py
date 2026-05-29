@@ -24,6 +24,7 @@ def make_client(monkeypatch, tmp_path):
     monkeypatch.setenv("GIP_DATA_DIR", str(tmp_path / "data"))
     monkeypatch.setenv("GIP_DATABASE_PATH", str(tmp_path / "data" / "test.sqlite3"))
     monkeypatch.setenv("GIP_ASSET_DIR", str(tmp_path / "data" / "assets"))
+    monkeypatch.setenv("GIP_SESSION_SECURE", "false")
 
     import backend.app.config as config
     import backend.app.db as db
@@ -803,7 +804,7 @@ def test_remote_image_cache_prunes_old_files_over_size_limit(monkeypatch, tmp_pa
     import backend.app.config as config
     import backend.app.remote_image_cache as remote_image_cache
 
-    monkeypatch.setattr(config.settings, "remote_image_cache_max_bytes", len(PIXEL_PNG) + 10)
+    monkeypatch.setattr(config.settings, "remote_image_cache_max_bytes", len(PIXEL_PNG) * 3)
     fake_client = mock_remote_image_download(monkeypatch)
 
     first_payload = template_payload(channel["id"])
@@ -812,6 +813,7 @@ def test_remote_image_cache_prunes_old_files_over_size_limit(monkeypatch, tmp_pa
     assert client.get(first_template["cachedExternalCoverUrl"]).status_code == 200
     first_path = remote_image_cache._cache_path("https://cdn.example.test/prune-first.png", ".png")
     assert first_path.exists()
+    first_mtime = first_path.stat().st_mtime
 
     second_payload = template_payload(channel["id"])
     second_payload["title"] = "Second remote image"
@@ -819,10 +821,24 @@ def test_remote_image_cache_prunes_old_files_over_size_limit(monkeypatch, tmp_pa
     second_template = client.post("/api/templates", json=second_payload).json()
     assert client.get(second_template["cachedExternalCoverUrl"]).status_code == 200
     second_path = remote_image_cache._cache_path("https://cdn.example.test/prune-second.png", ".png")
-
-    assert fake_client.calls == 2
-    assert not first_path.exists()
     assert second_path.exists()
+
+    time.sleep(0.01)
+    assert client.get(first_template["cachedExternalCoverUrl"]).status_code == 200
+    assert first_path.stat().st_mtime > first_mtime
+
+    monkeypatch.setattr(config.settings, "remote_image_cache_max_bytes", len(PIXEL_PNG) * 2 + 10)
+    third_payload = template_payload(channel["id"])
+    third_payload["title"] = "Third remote image"
+    third_payload["externalCoverUrl"] = "https://cdn.example.test/prune-third.png"
+    third_template = client.post("/api/templates", json=third_payload).json()
+    assert client.get(third_template["cachedExternalCoverUrl"]).status_code == 200
+    third_path = remote_image_cache._cache_path("https://cdn.example.test/prune-third.png", ".png")
+
+    assert fake_client.calls == 3
+    assert first_path.exists()
+    assert not second_path.exists()
+    assert third_path.exists()
 
 
 def test_remote_image_cache_rejects_unsafe_hosts_and_payloads(monkeypatch, tmp_path):
@@ -1405,6 +1421,27 @@ def test_reviewer_can_review_templates_but_cannot_manage_system(monkeypatch, tmp
     login(client, admin["username"])
     demoted = client.patch(f"/api/admin/users/{admin['id']}/role", json={"role": "user"})
     assert demoted.status_code == 400
+
+
+def test_admin_reset_password_returns_temp_password_without_audit_leak(monkeypatch, tmp_path):
+    client = make_client(monkeypatch, tmp_path)
+
+    admin = register(client)
+    client.post("/api/auth/logout")
+    target = register(client, username="bob", password="oldpassword")
+    client.post("/api/auth/logout")
+    login(client, admin["username"])
+
+    reset = client.post(f"/api/admin/users/{target['id']}/reset-password")
+    assert reset.status_code == 200
+    temp_password = reset.json()["tempPassword"]
+    assert temp_password
+
+    logs = client.get("/api/admin/audit-logs").json()
+    reset_log = next(log for log in logs if log["action"] == "user.reset_password")
+    assert reset_log["resourceId"] == target["id"]
+    assert reset_log["details"] == {"username": target["username"]}
+    assert temp_password not in json.dumps(reset_log["details"])
 
 
 def test_async_generation_run_is_rate_limited(monkeypatch, tmp_path):

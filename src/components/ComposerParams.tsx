@@ -100,6 +100,7 @@ export default function ComposerParams(props: ComposerParamsProps) {
       <span className={labelClass}>渠道</span>
       <Select
         value={settings.channelId || '__none__'}
+        label="渠道"
         onChange={(value) => {
           if (value === '__none__') {
             handleMissingGenerationConfig()
@@ -125,6 +126,7 @@ export default function ComposerParams(props: ComposerParamsProps) {
       <span className={labelClass}>模型</span>
       <Select
         value={settings.model || '__none__'}
+        label="模型"
         onChange={(value) => {
           if (!settings.channelId || value === '__none__') return
           selectChannelModel(settings.channelId, String(value))
@@ -167,6 +169,7 @@ export default function ComposerParams(props: ComposerParamsProps) {
       <span className={labelClass}>质量</span>
       <Select
         value={codexCli ? 'auto' : params.quality}
+        label="质量"
         onChange={(val) => {
           if (!codexCli) setParams({ quality: val as any })
         }}
@@ -193,6 +196,7 @@ export default function ComposerParams(props: ComposerParamsProps) {
       <span className={labelClass}>格式</span>
       <Select
         value={params.output_format}
+        label="格式"
         onChange={(val) => setParams({ output_format: val as any })}
         options={[
           { label: 'PNG', value: 'png' },
@@ -250,6 +254,7 @@ export default function ComposerParams(props: ComposerParamsProps) {
       <span className={labelClass}>审核</span>
       <Select
         value={settings.apiMode === 'responses' ? 'auto' : params.moderation}
+        label="审核"
         onChange={(val) => {
           if (settings.apiMode !== 'responses') setParams({ moderation: val as any })
         }}

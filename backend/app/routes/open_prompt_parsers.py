@@ -101,6 +101,41 @@ def _count_term_hits(text: str, terms: tuple[str, ...]) -> int:
     return hits
 
 
+def _image_prompt_combined_text(title: str, prompt: str, tags: list[str] | None, category: str, body: str) -> str:
+    return " ".join(
+        [
+            title.strip().lower(),
+            prompt.strip().lower(),
+            category.strip().lower(),
+            " ".join((tags or [])).lower(),
+            body.strip().lower(),
+        ],
+    )
+
+
+def _image_prompt_rejects_structure(title: str, prompt: str, body: str, positive_hits: int) -> bool:
+    normalized_title = title.strip().lower()
+    normalized_prompt = prompt.strip().lower()
+    if IMAGE_PROMPT_TITLE_BLOCKLIST.search(normalized_title):
+        return True
+    if IMAGE_PROMPT_HARD_REJECT_PATTERN.search(normalized_prompt[:1400]):
+        return True
+    if body and IMAGE_PROMPT_HARD_REJECT_PATTERN.search(body[:2200].lower()):
+        return True
+    if "<summary>" in normalized_prompt or "</details>" in normalized_prompt:
+        return True
+    bullet_like_lines = sum(
+        1
+        for line in prompt.splitlines()
+        if line.strip().startswith(("-", "*", "<details>", "<summary>", "`"))
+    )
+    return bullet_like_lines >= 3 and positive_hits < 4
+
+
+def _image_prompt_has_visual_anchor(image: str, tags: list[str] | None, category: str) -> bool:
+    return bool(image.strip()) or bool(category.strip()) or bool(tags)
+
+
 def _looks_like_image_generation_prompt(
     title: str,
     prompt: str,
@@ -110,44 +145,18 @@ def _looks_like_image_generation_prompt(
     category: str = "",
     body: str = "",
 ) -> bool:
-    normalized_title = title.strip().lower()
     normalized_prompt = prompt.strip().lower()
-    if len(normalized_prompt) < 40:
-        return False
-    if len(normalized_prompt) > 4500:
+    if len(normalized_prompt) < 40 or len(normalized_prompt) > 4500:
         return False
 
-    combined = " ".join(
-        [
-            normalized_title,
-            normalized_prompt,
-            category.strip().lower(),
-            " ".join((tags or [])).lower(),
-            body.strip().lower(),
-        ],
-    )
+    combined = _image_prompt_combined_text(title, prompt, tags, category, body)
     positive_hits = _count_term_hits(combined, IMAGE_PROMPT_POSITIVE_TERMS)
     negative_hits = _count_term_hits(combined, IMAGE_PROMPT_NEGATIVE_TERMS)
-    has_visual_anchor = bool(image.strip()) or bool(category.strip()) or bool(tags)
-
-    if IMAGE_PROMPT_TITLE_BLOCKLIST.search(normalized_title):
-        return False
-    if IMAGE_PROMPT_HARD_REJECT_PATTERN.search(normalized_prompt[:1400]):
-        return False
-    if body and IMAGE_PROMPT_HARD_REJECT_PATTERN.search(body[:2200].lower()):
-        return False
-    if "<summary>" in normalized_prompt or "</details>" in normalized_prompt:
-        return False
-    bullet_like_lines = sum(
-        1
-        for line in prompt.splitlines()
-        if line.strip().startswith(("-", "*", "<details>", "<summary>", "`"))
-    )
-    if bullet_like_lines >= 3 and positive_hits < 4:
+    if _image_prompt_rejects_structure(title, prompt, body, positive_hits):
         return False
     if negative_hits >= 2 and positive_hits < 3:
         return False
-    if has_visual_anchor and positive_hits >= 1 and negative_hits == 0:
+    if _image_prompt_has_visual_anchor(image, tags, category) and positive_hits >= 1 and negative_hits == 0:
         return True
     return positive_hits >= 3 and negative_hits == 0
 

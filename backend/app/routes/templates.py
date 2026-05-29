@@ -115,6 +115,65 @@ def _template_variable_count(prompt: str, negative_prompt: str | None = None) ->
     return len(names)
 
 
+def _prompt_length_quality(prompt_len: int, thresholds: list[tuple[int, float]]) -> float:
+    for min_len, points in thresholds:
+        if prompt_len >= min_len:
+            return points
+    return 0.0
+
+
+def _term_relevance_quality(combined: str, max_hits: int) -> float:
+    return min(_count_term_hits(combined, IMAGE_PROMPT_POSITIVE_TERMS), max_hits) * 2.5
+
+
+def _template_metadata_quality(
+    title: str,
+    prompt: str,
+    tags: list[str],
+    category: str,
+    negative_prompt: str | None,
+) -> float:
+    score = 0.0
+    if title.strip() and len(title.strip()) <= 80:
+        score += 5
+    if category.strip():
+        score += 4
+    score += min(len(tags), 5) * 1.5
+    if negative_prompt and len(negative_prompt.strip()) >= 10:
+        score += 3
+    score += min(_template_variable_count(prompt, negative_prompt), 4) * 1.5
+    return score
+
+
+def _template_visual_quality(cover_image_id: str | None, external_cover_url: str | None, example_images: list[str]) -> float:
+    score = 5.0 if cover_image_id or external_cover_url else 0.0
+    if example_images:
+        score += min(len(example_images), 4) * 1.75
+    return score
+
+
+def _template_usage_quality(
+    usage_count: int,
+    favorite_count: int,
+    success_count: int,
+    failure_count: int,
+    rating_total: int,
+    rating_count: int,
+) -> float:
+    score = 0.0
+    total_generations = max(0, success_count) + max(0, failure_count)
+    if total_generations >= 3:
+        score += (max(0, success_count) / total_generations) * 12
+    score += min(max(0, success_count), 20) * 0.3
+    score += min(max(0, usage_count), 50) / 50 * 4
+    score += min(max(0, favorite_count), 20) / 20 * 4
+    if rating_count > 0:
+        avg_rating = max(0, rating_total) / rating_count
+        score += (avg_rating / 5) * 8
+        score += min(rating_count, 10) / 10 * 2
+    return score
+
+
 def _calculate_template_quality(
     title: str,
     prompt: str,
@@ -132,54 +191,14 @@ def _calculate_template_quality(
     rating_total: int = 0,
     rating_count: int = 0,
 ) -> float:
-    score = 0.0
-
-    # --- Prompt content quality (max 35) ---
+    del source_name
     prompt_text = prompt.strip()
-    prompt_len = len(prompt_text)
-    if prompt_len >= 200:
-        score += 18
-    elif prompt_len >= 120:
-        score += 14
-    elif prompt_len >= 60:
-        score += 8
-    elif prompt_len >= 20:
-        score += 3
-
     combined = f"{title} {prompt_text} {category} {' '.join(tags)}".lower()
-    relevance_hits = _count_term_hits(combined, IMAGE_PROMPT_POSITIVE_TERMS)
-    score += min(relevance_hits, 7) * 2.5  # max +17.5
-
-    # --- Structure & metadata (max 25) ---
-    if title.strip() and len(title.strip()) <= 80:
-        score += 5
-    if category.strip():
-        score += 4
-    score += min(len(tags), 5) * 1.5  # max +7.5
-    if negative_prompt and len(negative_prompt.strip()) >= 10:
-        score += 3
-    var_count = _template_variable_count(prompt, negative_prompt)
-    score += min(var_count, 4) * 1.5  # max +6
-
-    # --- Visual assets (max 12) ---
-    if cover_image_id or external_cover_url:
-        score += 5
-    if example_images:
-        score += min(len(example_images), 4) * 1.75  # max +7
-
-    # --- Usage signals (max 28) ---
-    total_generations = max(0, success_count) + max(0, failure_count)
-    if total_generations >= 3:
-        success_rate = max(0, success_count) / total_generations
-        score += success_rate * 12  # max +12
-    score += min(max(0, success_count), 20) * 0.3  # max +6
-    score += min(max(0, usage_count), 50) / 50 * 4  # max +4
-    score += min(max(0, favorite_count), 20) / 20 * 4  # max +4
-    if rating_count > 0:
-        avg_rating = max(0, rating_total) / rating_count
-        score += (avg_rating / 5) * 8  # max +8
-        score += min(rating_count, 10) / 10 * 2  # max +2 (confidence bonus)
-
+    score = _prompt_length_quality(len(prompt_text), [(200, 18), (120, 14), (60, 8), (20, 3)])
+    score += _term_relevance_quality(combined, 7)
+    score += _template_metadata_quality(title, prompt, tags, category, negative_prompt)
+    score += _template_visual_quality(cover_image_id, external_cover_url, example_images)
+    score += _template_usage_quality(usage_count, favorite_count, success_count, failure_count, rating_total, rating_count)
     return round(max(0.0, min(score, 100.0)), 1)
 
 
@@ -282,6 +301,31 @@ def _normalize_open_prompt_fields(source: OpenPromptSource, item: dict[str, str 
     }
 
 
+def _open_prompt_source_quality(source_name: str, source_url: str, source_author: str, license_name: str) -> float:
+    score = 0.0
+    for value in (source_name, source_url, source_author, license_name):
+        if value:
+            score += 2
+    return score
+
+
+def _open_prompt_metadata_quality(title: str, tags: list[str], category: str) -> float:
+    score = 0.0
+    if title and len(title) <= 90:
+        score += 7
+    if category:
+        score += 7
+    score += min(len(tags), 5) * 2
+    return score
+
+
+def _open_prompt_visual_quality(image: str, example_images: list[str]) -> float:
+    score = 12.0 if image else 0.0
+    if example_images:
+        score += min(len(example_images), 3) * 2.5 + 5.5
+    return score
+
+
 def _calculate_open_prompt_import_quality(fields: dict[str, Any], source_name: str) -> float:
     title = str(fields.get("title") or "").strip()
     prompt = str(fields.get("prompt") or "").strip()
@@ -292,49 +336,20 @@ def _calculate_open_prompt_import_quality(fields: dict[str, Any], source_name: s
     source_author = str(fields.get("sourceAuthor") or "").strip()
     license_name = str(fields.get("licenseName") or "").strip()
     example_images = _normalize_example_images(fields.get("exampleImages", []))
-
-    score = 0.0
     prompt_len = len(prompt)
-    if prompt_len >= 240:
-        score += 28
-    elif prompt_len >= 140:
-        score += 24
-    elif prompt_len >= 80:
-        score += 20
-    elif prompt_len >= 40:
-        score += 16
-    elif prompt_len >= 20:
-        score += 8
-
     combined = f"{title} {prompt} {category} {' '.join(tags)}".lower()
     relevance_hits = _count_term_hits(combined, IMAGE_PROMPT_POSITIVE_TERMS)
+
+    score = _prompt_length_quality(len(prompt), [(240, 28), (140, 24), (80, 20), (40, 16), (20, 8)])
     score += min(relevance_hits, 8) * 2.5
     score += min(_template_variable_count(prompt), 4) * 1.5
-
-    if title and len(title) <= 90:
-        score += 7
-    if category:
-        score += 7
-    score += min(len(tags), 5) * 2
-    if source_name:
-        score += 2
-    if source_url:
-        score += 2
-    if source_author:
-        score += 2
-    if license_name:
-        score += 2
-
-    if image:
-        score += 12
-    if example_images:
-        score += min(len(example_images), 3) * 2.5 + 5.5
-
+    score += _open_prompt_metadata_quality(title, tags, category)
+    score += _open_prompt_source_quality(source_name, source_url, source_author, license_name)
+    score += _open_prompt_visual_quality(image, example_images)
     if prompt_len >= 40:
         score += 5
     if relevance_hits >= 2:
         score += 5
-
     return round(max(0.0, min(score, 100.0)), 1)
 
 

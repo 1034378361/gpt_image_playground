@@ -27,6 +27,7 @@ from ..schemas import (
     SystemBackupImportOut,
     SystemBackupPreviewOut,
     UserOut,
+    UserPasswordResetOut,
     UserRolePatchIn,
 )
 from ..security import create_session_token, hash_password, new_id, now_ms
@@ -923,11 +924,11 @@ def update_admin_user_role(
     return row_to_user(row)
 
 
-@router.post("/users/{user_id}/reset-password")
+@router.post("/users/{user_id}/reset-password", response_model=UserPasswordResetOut)
 def reset_user_password(
     user_id: str,
     admin: UserOut = Depends(require_admin),
-) -> dict[str, str]:
+) -> UserPasswordResetOut:
     import secrets
     temp_password = secrets.token_urlsafe(10)
     with get_conn() as conn:
@@ -948,7 +949,7 @@ def reset_user_password(
             user_id,
             {"username": target["username"]},
         )
-    return {"tempPassword": temp_password}
+    return UserPasswordResetOut(tempPassword=temp_password)
 
 
 # --- PLACEHOLDER_ROUTES_2 ---

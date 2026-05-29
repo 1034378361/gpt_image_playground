@@ -149,6 +149,10 @@ def _cached_file_for_url(url: str) -> Path | None:
     for extension in _MIME_EXTENSIONS.values():
         path = cache_dir / f"{digest}{extension}"
         if path.exists():
+            try:
+                path.touch()
+            except OSError:
+                pass
             return path
     return None
 

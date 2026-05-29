@@ -420,50 +420,65 @@ def create_channel(payload: ApiChannelIn, admin: UserOut = Depends(require_admin
     return row_to_admin_channel(row)
 
 
+def resolve_patch_codex_cli(row: Any, payload: ApiChannelPatch) -> tuple[str, bool]:
+    current_mode = normalize_codex_cli_mode(row["codex_cli_mode"] if "codex_cli_mode" in row.keys() else None)
+    if payload.codexCliMode is not None:
+        next_mode = payload.codexCliMode
+    elif payload.codexCli is not None:
+        next_mode = "codex" if payload.codexCli else "standard"
+    else:
+        next_mode = current_mode
+
+    if next_mode == "codex":
+        return next_mode, True
+    if next_mode == "standard":
+        return next_mode, False
+    if payload.codexCli is not None:
+        return next_mode, payload.codexCli
+    if next_mode != current_mode:
+        return next_mode, False
+    return next_mode, bool(row["codex_cli"])
+
+
+def resolve_channel_patch_values(row: Any, payload: ApiChannelPatch) -> dict[str, Any]:
+    current = row_to_admin_channel(row)
+    api_key = payload.apiKey.strip() if payload.apiKey is not None and payload.apiKey.strip() else row["api_key"]
+    codex_cli_mode, codex_cli = resolve_patch_codex_cli(row, payload)
+    values = {
+        "name": (payload.name if payload.name is not None else current.name).strip(),
+        "base_url": normalize_base_url(payload.baseUrl if payload.baseUrl is not None else current.baseUrl),
+        "api_key": api_key,
+        "models": normalize_channel_models(payload.models if payload.models is not None else current.models),
+        "timeout_seconds": max(
+            10,
+            min(
+                600,
+                int(
+                    payload.timeoutSeconds
+                    if payload.timeoutSeconds is not None
+                    else (row["timeout_seconds"] or settings.request_timeout_seconds)
+                ),
+            ),
+        ),
+        "codex_cli": codex_cli,
+        "codex_cli_mode": codex_cli_mode,
+        "is_enabled": payload.isEnabled if payload.isEnabled is not None else current.isEnabled,
+    }
+    if not values["name"]:
+        raise HTTPException(status_code=400, detail="Channel name is required")
+    if not values["api_key"]:
+        raise HTTPException(status_code=400, detail="API key is required")
+    return values
+
+
 @router.patch("/api/admin/channels/{channel_id}", response_model=AdminApiChannelOut)
 def patch_channel(channel_id: str, payload: ApiChannelPatch, admin: UserOut = Depends(require_admin)) -> AdminApiChannelOut:
     row = get_channel_row_or_404(channel_id, admin=True)
     data = payload.model_dump(exclude_unset=True)
     if not data:
         return row_to_admin_channel(row)
-    current = row_to_admin_channel(row)
-    next_name = (payload.name if payload.name is not None else current.name).strip()
-    next_base_url = normalize_base_url(payload.baseUrl if payload.baseUrl is not None else current.baseUrl)
-    next_api_key = payload.apiKey.strip() if payload.apiKey is not None and payload.apiKey.strip() else row["api_key"]
-    next_models = normalize_channel_models(payload.models if payload.models is not None else current.models)
-    next_timeout_seconds = max(
-        10,
-        min(
-            600,
-            int(
-                payload.timeoutSeconds
-                if payload.timeoutSeconds is not None
-                else (row["timeout_seconds"] or settings.request_timeout_seconds)
-            ),
-        ),
-    )
-    current_mode = normalize_codex_cli_mode(row["codex_cli_mode"] if "codex_cli_mode" in row.keys() else None)
-    if payload.codexCliMode is not None:
-        next_codex_cli_mode = payload.codexCliMode
-    elif payload.codexCli is not None:
-        next_codex_cli_mode = "codex" if payload.codexCli else "standard"
-    else:
-        next_codex_cli_mode = current_mode
-    if next_codex_cli_mode == "codex":
-        next_codex_cli = True
-    elif next_codex_cli_mode == "standard":
-        next_codex_cli = False
-    elif payload.codexCli is not None:
-        next_codex_cli = payload.codexCli
-    elif next_codex_cli_mode != current_mode:
-        next_codex_cli = False
-    else:
-        next_codex_cli = bool(row["codex_cli"])
-    next_enabled = payload.isEnabled if payload.isEnabled is not None else current.isEnabled
-    if not next_name:
-        raise HTTPException(status_code=400, detail="Channel name is required")
-    if not next_api_key:
-        raise HTTPException(status_code=400, detail="API key is required")
+
+    values = resolve_channel_patch_values(row, payload)
     ts = now_ms()
     with get_conn() as conn:
         conn.execute(
@@ -473,14 +488,14 @@ def patch_channel(channel_id: str, payload: ApiChannelPatch, admin: UserOut = De
             WHERE id = ?
             """,
             (
-                next_name,
-                next_base_url,
-                next_api_key,
-                json_dumps([model.model_dump() for model in next_models]),
-                next_timeout_seconds,
-                int(next_codex_cli),
-                next_codex_cli_mode,
-                int(next_enabled),
+                values["name"],
+                values["base_url"],
+                values["api_key"],
+                json_dumps([model.model_dump() for model in values["models"]]),
+                values["timeout_seconds"],
+                int(values["codex_cli"]),
+                values["codex_cli_mode"],
+                int(values["is_enabled"]),
                 ts,
                 channel_id,
             ),
@@ -494,12 +509,12 @@ def patch_channel(channel_id: str, payload: ApiChannelPatch, admin: UserOut = De
             "api_channel",
             channel_id,
             {
-                "name": next_name,
+                "name": values["name"],
                 "changed": sorted(data.keys()),
-                "models": [model.id for model in next_models],
-                "timeoutSeconds": next_timeout_seconds,
-                "codexCliMode": next_codex_cli_mode,
-                "isEnabled": bool(next_enabled),
+                "models": [model.id for model in values["models"]],
+                "timeoutSeconds": values["timeout_seconds"],
+                "codexCliMode": values["codex_cli_mode"],
+                "isEnabled": bool(values["is_enabled"]),
             },
         )
         updated = conn.execute("SELECT * FROM api_channels WHERE id = ?", (channel_id,)).fetchone()

@@ -7,7 +7,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ```bash
 # Install dependencies
 npm install
-pip install -r backend/requirements.txt
+uv pip install -r backend/requirements.txt
 npx playwright install
 
 # Local development: run backend and frontend in separate terminals
@@ -25,14 +25,18 @@ npm run test:watch
 npx vitest run src/store.test.ts
 npx vitest run src/lib/mask.test.ts
 
-# Backend tests (Pytest)
+# Backend tests (Pytest; run through uv so pytest/pytest-asyncio come from backend/requirements.txt)
 npm run backend:test
-python -m pytest backend/tests/test_api.py
-python -m pytest backend/tests/test_generation_runtime.py
+uv run --with-requirements backend/requirements.txt python -m pytest backend/tests/test_api.py
+uv run --with-requirements backend/requirements.txt python -m pytest backend/tests/test_generation_runtime.py
 
 # E2E tests (Playwright; tests mock /api routes and start Vite on 127.0.0.1:4174)
 npm run e2e
 npx playwright test e2e/app.spec.ts
+
+# Release/build smoke checks
+npm run version:check
+npm run smoke:dist
 
 # Docker / NAS builds
 docker compose up --build
@@ -40,7 +44,7 @@ npm run docker:build:single
 npm run docker:save:single
 ```
 
-There is no dedicated lint script in `package.json`; `npm run build` runs `tsc -b` before the Vite build.
+There is no dedicated lint script in `package.json`; `npm run build` runs `tsc -b` before the Vite build. `package.json` is the canonical app version; `npm run version:check` verifies it against `package-lock.json`, release tags, and the NAS single-image env example. `npm run smoke:dist` requires a prior `npm run build` and checks the built `dist/` bundle for required static files and disabled Service Worker registration.
 
 ### Code analysis tools
 
@@ -98,7 +102,7 @@ This is a same-origin React SPA plus FastAPI backend for multi-user image genera
 - Persistent server state lives under `backend/data/`: SQLite database (`app.sqlite3`), generated/uploaded assets, and restore points.
 - Browser IndexedDB caches recent tasks/templates/images for startup and local image reuse, but server data is authoritative once the user is logged in.
 - The first registered user becomes admin. Roles are `user`, `reviewer`, and `admin`.
-- Admin-managed channels define upstream base URL, API key, timeout, model list, and compatibility mode. Normal users only choose from enabled channels/models.
+- Admin-managed channels define upstream base URL, API key, timeout, model list, compatibility mode, and Codex CLI mode. Normal users only choose from enabled channels/models.
 - Generation flow: frontend prepares prompt/images/mask data, submits to backend generation routes, backend enqueues work in `GenerationRuntime`, workers call the configured upstream image API, then results are stored as assets plus task metadata for polling/sync.
 - Templates support private drafts plus reviewed public sharing, and tasks/templates can be grouped into project boards.
 - Open prompt imports are handled by backend prompt routes and parser helpers, then appear as reviewed/importable template data in the UI.

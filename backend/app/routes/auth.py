@@ -61,6 +61,69 @@ def consume_invite_code_or_400(conn: Any, invite_row: Any, ts: int) -> None:
     raise HTTPException(status_code=400, detail="邀请码当前不可用，请稍后重试")
 
 
+def validate_invite_row(invite_row: Any | None, ts: int) -> Any:
+    if not invite_row:
+        raise HTTPException(status_code=400, detail="邀请码无效")
+    if not bool(invite_row["is_enabled"]):
+        raise HTTPException(status_code=400, detail="邀请码已停用")
+    if invite_row["expires_at"] is not None and int(invite_row["expires_at"]) < ts:
+        raise HTTPException(status_code=400, detail="邀请码已过期")
+    if invite_row["max_uses"] is not None and int(invite_row["used_count"] or 0) >= int(invite_row["max_uses"]):
+        raise HTTPException(status_code=400, detail="邀请码已用完")
+    return invite_row
+
+
+def resolve_registration_invite(conn: Any, payload: AuthRegisterIn, user_count: int, ts: int) -> Any | None:
+    if user_count == 0:
+        return None
+
+    registration_mode = str(get_auth_settings(conn)["registrationMode"])
+    if registration_mode == "disabled":
+        raise HTTPException(status_code=403, detail="当前系统已关闭用户注册")
+    if registration_mode != "invite_only":
+        return None
+
+    invite_code = (payload.inviteCode or "").strip()
+    if not invite_code:
+        raise HTTPException(status_code=400, detail="当前注册需要邀请码")
+    invite_row = conn.execute(
+        "SELECT * FROM registration_invite_codes WHERE code = ?",
+        (invite_code,),
+    ).fetchone()
+    return validate_invite_row(invite_row, ts)
+
+
+def insert_registered_user(conn: Any, *, user_id: str, username: str, password_hash: str, role: str, ts: int) -> Any:
+    conn.execute(
+        """
+        INSERT INTO users (id, username, password_hash, role, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+        """,
+        (user_id, username, password_hash, role, ts, ts),
+    )
+    return conn.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
+
+
+def insert_session(conn: Any, *, token: str, user_id: str, ts: int) -> None:
+    expires_at = ts + settings.session_ttl_seconds * 1000
+    conn.execute(
+        "INSERT INTO sessions (id, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)",
+        (token, user_id, ts, expires_at),
+    )
+
+
+def record_invite_code_use(conn: Any, *, invite_row: Any, user_id: str, username: str, ts: int) -> None:
+    consume_invite_code_or_400(conn, invite_row, ts)
+    conn.execute(
+        """
+        INSERT INTO registration_invite_code_uses (
+          id, invite_code_id, invite_code, user_id, username, used_at
+        ) VALUES (?, ?, ?, ?, ?, ?)
+        """,
+        (new_id(), invite_row["id"], invite_row["code"], user_id, username, ts),
+    )
+
+
 # ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
@@ -76,7 +139,6 @@ def register(payload: AuthRegisterIn, response: Response) -> UserOut:
 
     user_id = new_id()
     ts = now_ms()
-    expires_at = ts + settings.session_ttl_seconds * 1000
     password_hash = hash_password(payload.password)
     token = create_session_token()
 
@@ -84,51 +146,19 @@ def register(payload: AuthRegisterIn, response: Response) -> UserOut:
         with get_conn() as conn:
             conn.execute("BEGIN IMMEDIATE")
             user_count = conn.execute("SELECT COUNT(*) AS count FROM users").fetchone()["count"]
-            auth_settings = get_auth_settings(conn)
-            registration_mode = str(auth_settings["registrationMode"])
-            invite_row = None
-            if user_count > 0:
-                if registration_mode == "disabled":
-                    raise HTTPException(status_code=403, detail="当前系统已关闭用户注册")
-                if registration_mode == "invite_only":
-                    invite_code = (payload.inviteCode or "").strip()
-                    if not invite_code:
-                        raise HTTPException(status_code=400, detail="当前注册需要邀请码")
-                    invite_row = conn.execute(
-                        "SELECT * FROM registration_invite_codes WHERE code = ?",
-                        (invite_code,),
-                    ).fetchone()
-                    if not invite_row:
-                        raise HTTPException(status_code=400, detail="邀请码无效")
-                    if not bool(invite_row["is_enabled"]):
-                        raise HTTPException(status_code=400, detail="邀请码已停用")
-                    if invite_row["expires_at"] is not None and int(invite_row["expires_at"]) < ts:
-                        raise HTTPException(status_code=400, detail="邀请码已过期")
-                    if invite_row["max_uses"] is not None and int(invite_row["used_count"] or 0) >= int(invite_row["max_uses"]):
-                        raise HTTPException(status_code=400, detail="邀请码已用完")
+            invite_row = resolve_registration_invite(conn, payload, user_count, ts)
             role = "admin" if user_count == 0 else "user"
-            conn.execute(
-                """
-                INSERT INTO users (id, username, password_hash, role, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?)
-                """,
-                (user_id, username, password_hash, role, ts, ts),
+            row = insert_registered_user(
+                conn,
+                user_id=user_id,
+                username=username,
+                password_hash=password_hash,
+                role=role,
+                ts=ts,
             )
-            conn.execute(
-                "INSERT INTO sessions (id, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)",
-                (token, user_id, ts, expires_at),
-            )
+            insert_session(conn, token=token, user_id=user_id, ts=ts)
             if invite_row is not None:
-                consume_invite_code_or_400(conn, invite_row, ts)
-                conn.execute(
-                    """
-                    INSERT INTO registration_invite_code_uses (
-                      id, invite_code_id, invite_code, user_id, username, used_at
-                    ) VALUES (?, ?, ?, ?, ?, ?)
-                    """,
-                    (new_id(), invite_row["id"], invite_row["code"], user_id, username, ts),
-                )
-            row = conn.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
+                record_invite_code_use(conn, invite_row=invite_row, user_id=user_id, username=username, ts=ts)
     except Exception as exc:
         if isinstance(exc, HTTPException):
             raise

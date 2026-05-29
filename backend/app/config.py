@@ -15,7 +15,7 @@ class Settings:
         self.restore_point_dir = Path(os.getenv("GIP_RESTORE_POINT_DIR", data_dir / "restore-points"))
         self.frontend_dist_dir = Path(os.getenv("GIP_FRONTEND_DIST_DIR", repo_dir / "dist"))
         self.session_cookie_name = os.getenv("GIP_SESSION_COOKIE", "gip_session")
-        self.session_secure = os.getenv("GIP_SESSION_SECURE", "false").lower() == "true"
+        self.session_secure = os.getenv("GIP_SESSION_SECURE", "true").lower() == "true"
         self.session_ttl_seconds = int(os.getenv("GIP_SESSION_TTL_SECONDS", str(7 * 24 * 60 * 60)))
         self.default_api_base_url = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
         self.request_timeout_seconds = float(os.getenv("GIP_REQUEST_TIMEOUT_SECONDS", "300"))

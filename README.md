@@ -125,7 +125,7 @@ cp deploy/nas.env.example .env
 至少建议确认这几个值：
 
 - `GIP_HTTP_PORT=8080`
-- `GIP_SESSION_SECURE=false`
+- `GIP_SESSION_SECURE=false`（仅限内网 HTTP；应用默认值是 `true`）
 - `GIP_CORS_ORIGINS=http://你的NAS地址:8080`
 
 如果你会通过 NAS 自带反向代理或 Nginx Proxy Manager 用 HTTPS 暴露出去，请改成：

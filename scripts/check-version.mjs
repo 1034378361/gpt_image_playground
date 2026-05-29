@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync, readFileSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 
 const rootDir = process.cwd()
@@ -8,6 +8,7 @@ const packageVersion = packageJson.version
 const lockVersion = packageLock.version
 const lockRootVersion = packageLock.packages?.['']?.version
 const tagVersion = normalizeTagVersion(process.argv[2] || process.env.GITHUB_REF_NAME || process.env.GITHUB_REF || '')
+const deployEnvVersionKeys = ['GIP_IMAGE_TAG', 'GIP_IMAGE_BUILD_VERSION']
 
 if (!packageVersion) {
   fail('package.json is missing a version field')
@@ -15,8 +16,7 @@ if (!packageVersion) {
 
 assertEqual('package-lock.json version', lockVersion, packageVersion)
 assertEqual('package-lock root package version', lockRootVersion, packageVersion)
-assertEnvVersion('deploy/fnnas.single.env.example', 'GIP_IMAGE_TAG', packageVersion)
-assertEnvVersion('deploy/fnnas.single.env.example', 'GIP_IMAGE_BUILD_VERSION', packageVersion)
+assertDeployEnvVersions(packageVersion)
 
 if (tagVersion) {
   assertEqual('release tag version', tagVersion, packageVersion)
@@ -36,15 +36,22 @@ function normalizeTagVersion(value) {
   return tag.slice(1)
 }
 
-function assertEnvVersion(relativePath, key, expected) {
-  const filePath = join(rootDir, relativePath)
-  if (!existsSync(filePath)) return
-  const lines = readFileSync(filePath, 'utf8').split(/\r?\n/)
-  const line = lines.find((item) => item.startsWith(`${key}=`))
-  if (!line) {
-    fail(`${relativePath} is missing ${key}`)
+function assertDeployEnvVersions(expected) {
+  const deployDir = join(rootDir, 'deploy')
+  if (!existsSync(deployDir)) return
+  for (const fileName of readdirSync(deployDir)) {
+    if (!fileName.endsWith('.env.example')) continue
+    assertEnvVersionsInFile(`deploy/${fileName}`, expected)
   }
-  assertEqual(`${relativePath} ${key}`, line.slice(key.length + 1).trim(), expected)
+}
+
+function assertEnvVersionsInFile(relativePath, expected) {
+  const lines = readFileSync(join(rootDir, relativePath), 'utf8').split(/\r?\n/)
+  for (const key of deployEnvVersionKeys) {
+    const line = lines.find((item) => item.startsWith(`${key}=`))
+    if (!line) continue
+    assertEqual(`${relativePath} ${key}`, line.slice(key.length + 1).trim(), expected)
+  }
 }
 
 function assertEqual(label, actual, expected) {

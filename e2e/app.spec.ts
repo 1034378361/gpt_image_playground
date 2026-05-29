@@ -72,6 +72,38 @@ const leaderboard = [
   },
 ]
 
+const projects = [
+  {
+    id: 'project-1',
+    name: '测试项目',
+    description: '',
+    color: '#3b82f6',
+    isArchived: false,
+    taskCount: 0,
+    templateCount: 0,
+    createdAt: now,
+    updatedAt: now,
+  },
+]
+
+const queueStats = {
+  workerCount: 2,
+  queuedCount: 0,
+  runningCount: 0,
+  yourQueuedCount: 0,
+  yourRunningCount: 0,
+}
+
+function pageResult<T>(items: T[]) {
+  return {
+    items,
+    total: items.length,
+    limit: 80,
+    offset: 0,
+    hasMore: false,
+  }
+}
+
 function buildTemplate(userId: string) {
   return {
     id: 'template-1',
@@ -89,6 +121,8 @@ function buildTemplate(userId: string) {
     coverImageId: null,
     externalCoverUrl: null,
     exampleImages: [],
+    cachedExternalCoverUrl: null,
+    cachedExampleImages: [],
     recommendedChannelId: publicChannel.id,
     recommendedApiMode: 'images',
     recommendedModel: 'gpt-image-2',
@@ -98,6 +132,9 @@ function buildTemplate(userId: string) {
     sourceUrl: '',
     sourceAuthor: '',
     licenseName: '',
+    formFields: [],
+    collections: [],
+    isFeatured: false,
     visibility: 'public',
     submissionStatus: 'approved',
     submittedAt: null,
@@ -198,18 +235,44 @@ async function mockApp(page: Page, options: { initialUser: typeof adminUser | ty
       return
     }
 
+    if (path === '/projects') {
+      await fulfillJson(route, 200, projects)
+      return
+    }
+
     if (path === '/templates') {
-      await fulfillJson(route, 200, templates)
+      await fulfillJson(route, 200, pageResult(templates))
       return
     }
 
     if (path === '/generations') {
-      await fulfillJson(route, 200, tasks)
+      await fulfillJson(route, 200, pageResult(tasks))
+      return
+    }
+
+    if (path === '/generations/queue-stats') {
+      await fulfillJson(route, 200, queueStats)
+      return
+    }
+
+    if (path === '/generations/preflight') {
+      await fulfillJson(route, 200, {
+        ok: true,
+        predictedApiMode: 'images',
+        codexCli: false,
+        normalizedParams: params,
+        diagnostics: [],
+      })
       return
     }
 
     if (path === '/admin/channels') {
       await fulfillJson(route, 200, sessionUser?.role === 'admin' ? [adminChannel] : [])
+      return
+    }
+
+    if (path === '/admin/users') {
+      await fulfillJson(route, 200, sessionUser?.role === 'admin' ? [adminUser, normalUser] : [])
       return
     }
 
@@ -272,11 +335,11 @@ test('shows auth gate, completes admin registration, and opens admin settings', 
   await page.getByRole('button', { name: '注册' }).click()
 
   await expect(page.getByText('alice')).toBeVisible()
-  await expect(page.getByText('渠道效果榜')).toBeVisible()
-  await expect(page.locator('[title="管理员设置"]')).toBeVisible()
+  await expect(page.getByRole('button', { name: /渠道状态/ })).toBeVisible()
+  await expect(page.locator('[title="管理控制台"]')).toBeVisible()
 
-  await page.locator('[title="管理员设置"]').click()
-  await expect(page.getByText('管理员设置')).toBeVisible()
+  await page.locator('[title="管理控制台"]').click()
+  await expect(page.getByRole('heading', { name: '管理控制台' })).toBeVisible({ timeout: 10_000 })
 })
 
 test('hides admin settings for normal users and supports task/template switching', async ({ page }) => {
@@ -284,9 +347,8 @@ test('hides admin settings for normal users and supports task/template switching
 
   await page.goto('/')
 
-  await expect(page.getByText('渠道效果榜')).toBeVisible()
-  await expect(page.locator('[title="管理员设置"]')).toHaveCount(0)
-  await expect(page.getByPlaceholder('搜索提示词、参数...')).toBeVisible()
+  await expect(page.getByRole('button', { name: /渠道状态/ })).toBeVisible()
+  await expect(page.locator('[title="管理控制台"]')).toHaveCount(0)
   await expect(page.getByText('A studio bottle render')).toBeVisible()
 
   await page.locator('header').getByRole('button', { name: '模板', exact: true }).click()
@@ -294,5 +356,51 @@ test('hides admin settings for normal users and supports task/template switching
   await expect(page.getByText('电商产品白底')).toBeVisible()
 
   await page.locator('header').getByRole('button', { name: '任务', exact: true }).click()
-  await expect(page.getByPlaceholder('搜索提示词、参数...')).toBeVisible()
+  await expect(page.getByText('A studio bottle render')).toBeVisible()
+})
+
+test('keeps composer open while entering Chinese prompt and choosing channel or model', async ({ page }) => {
+  await mockApp(page, { initialUser: normalUser })
+  await page.goto('/')
+
+  // The desktop composer is collapsed (translated off-screen) by default;
+  // reveal it via the dedicated reveal button before interacting with the textarea.
+  await page.getByRole('button', { name: '展开提示词输入区' }).click()
+
+  const promptInput = page.getByPlaceholder('描述你想生成的图片...')
+  await promptInput.focus()
+  await expect(promptInput).toBeFocused()
+
+  // Simulate a real IME composition session so onCompositionStart/End fire.
+  await promptInput.evaluate((el) => {
+    const target = el as HTMLTextAreaElement
+    target.dispatchEvent(new CompositionEvent('compositionstart', { data: '' }))
+    target.dispatchEvent(new CompositionEvent('compositionupdate', { data: 'zhongwen' }))
+  })
+
+  // While still composing, leaving the dock must NOT collapse the composer.
+  await page.locator('[data-composer-dock]').dispatchEvent('mouseleave')
+  await expect(promptInput).toBeFocused()
+
+  await promptInput.evaluate((el) => {
+    const target = el as HTMLTextAreaElement
+    const setter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value')?.set
+    setter?.call(target, '中文提示词：一只玻璃杯放在木桌上，柔和自然光')
+    target.dispatchEvent(new Event('input', { bubbles: true }))
+    target.dispatchEvent(new CompositionEvent('compositionend', { data: target.value }))
+  })
+
+  await expect(page.getByText('最终提示词预览')).toBeVisible()
+
+  await page.getByRole('button', { name: /渠道：心梦渠道/ }).click()
+  await expect(page.getByRole('listbox')).toBeVisible()
+  await page.getByRole('option', { name: /心梦渠道/ }).click()
+  await expect(promptInput).toBeVisible()
+  await expect(page.getByText('最终提示词预览')).toBeVisible()
+
+  await page.getByRole('button', { name: /模型：GPT Image 2/ }).click()
+  await expect(page.getByRole('listbox')).toBeVisible()
+  await page.getByRole('option', { name: /GPT 5.5/ }).click()
+  await expect(promptInput).toBeVisible()
+  await expect(page.getByText('最终提示词预览')).toBeVisible()
 })
