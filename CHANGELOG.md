@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.6.3 - 2026-05-29
+
+### Fixed
+- Preserve the selected task space, task status filter, and favorites-only filter across page refreshes.
+- Keep the special unassigned task space selected during backend data sync instead of falling back to all tasks.
+
 ## 1.6.2 - 2026-05-28
 
 ### Added

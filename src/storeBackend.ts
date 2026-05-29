@@ -34,7 +34,7 @@ import {
 import { validateMaskMatchesImage } from './lib/canvasImage'
 import { orderInputImagesForMask } from './lib/mask'
 import { normalizeImageSize } from './lib/size'
-import { normalizeSelectedProjectId, getTemplateCoverImageIds } from './lib/templateUtils'
+import { normalizeSelectedProjectId, getTemplateCoverImageIds, UNASSIGNED_PROJECT_ID } from './lib/templateUtils'
 import * as backendApi from './lib/backendApi'
 import {
   ensureImageCached,
@@ -831,7 +831,7 @@ export async function syncServerData() {
     setChannelLeaderboard(channelLeaderboard)
     setQueueStats(queueStats)
     syncChannelSelection(channels)
-    if (currentProjectId && !projects.some((project) => project.id === currentProjectId)) {
+    if (currentProjectId && currentProjectId !== UNASSIGNED_PROJECT_ID && !projects.some((project) => project.id === currentProjectId)) {
       setCurrentProjectId(null)
     }
 

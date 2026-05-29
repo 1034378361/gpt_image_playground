@@ -5,6 +5,7 @@ import { imageCache, useStore } from './store'
 import { importData, loadMoreServerTasks, loadMoreServerTemplates, syncServerData, retryTask, cancelMultipleTasks, submitTask, submitTaskMatrix, generateVariation } from './storeBackend'
 import * as backendApi from './lib/backendApi'
 import { clearImages, storeImage } from './lib/db'
+import { UNASSIGNED_PROJECT_ID } from './lib/templateUtils'
 
 vi.mock('./lib/backendApi', () => ({
   getMe: vi.fn(),
@@ -223,6 +224,14 @@ describe('storeBackend state flows', () => {
     expect(state.currentProjectId).toBeNull()
     expect(state.settings.channelId).toBe('channel-a')
     expect(state.settings.model).toBe('model-a')
+  })
+
+  it('syncServerData preserves the unassigned task-space filter', async () => {
+    useStore.setState({ currentProjectId: UNASSIGNED_PROJECT_ID })
+
+    await syncServerData()
+
+    expect(useStore.getState().currentProjectId).toBe(UNASSIGNED_PROJECT_ID)
   })
 
   it('syncServerData writes paged task and template data', async () => {
