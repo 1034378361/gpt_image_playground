@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.6.4 - 2026-06-12
+
+### Fixed
+- Fix gallery "select all" selecting every task in the account instead of the visible tasks for the current project, by sharing one filter implementation between the gallery grid and the batch select-all action.
+
 ## 1.6.3 - 2026-05-29
 
 ### Fixed
