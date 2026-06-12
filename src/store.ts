@@ -51,7 +51,6 @@ import {
   normalizeTemplateDraft,
 } from './lib/templateUtils'
 import * as backendApi from './lib/backendApi'
-import { updateTaskInStore } from './storeTaskMutations'
 
 // ===== Image cache =====
 // 内存 LRU 缓存，id → dataUrl，避免每次从 IndexedDB 读取

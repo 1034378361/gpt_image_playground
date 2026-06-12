@@ -7,6 +7,7 @@ import { DEFAULT_PARAMS } from '../types'
 import { createMaskPreviewDataUrl } from '../lib/canvasImage'
 import { shouldCollapseComposer } from '../lib/composerCollapse'
 import { canManageSystem } from '../lib/roles'
+import { filterTasks } from '../lib/taskFilter'
 import SizePickerModal from './SizePickerModal'
 import ExperimentLabModal from './ExperimentLabModal'
 import ComposerParams from './ComposerParams'
@@ -93,21 +94,10 @@ export default function InputBar() {
     [selectedTasks],
   )
   const activeProjects = useMemo(() => projects.filter((project) => !project.isArchived), [projects])
-  const filteredTasks = useMemo(() => {
-    const sorted = [...tasks].sort((a, b) => b.createdAt - a.createdAt)
-    const q = searchQuery.trim().toLowerCase()
-    
-    return sorted.filter((t) => {
-      if (filterFavorite && !t.isFavorite) return false
-      const matchStatus = filterStatus === 'all' || t.status === filterStatus
-      if (!matchStatus) return false
-      
-      if (!q) return true
-      const prompt = (t.prompt || '').toLowerCase()
-      const paramStr = JSON.stringify(t.params).toLowerCase()
-      return prompt.includes(q) || paramStr.includes(q)
-    })
-  }, [tasks, searchQuery, filterStatus, filterFavorite])
+  const filteredTasks = useMemo(
+    () => filterTasks(tasks, { currentProjectId, filterStatus, filterFavorite, searchQuery }),
+    [currentProjectId, tasks, searchQuery, filterStatus, filterFavorite],
+  )
 
   const handleSelectAllToggle = useCallback(() => {
     if (selectedTaskIds.length === filteredTasks.length && filteredTasks.length > 0) {

@@ -3,6 +3,7 @@ import { useStore, reuseConfig, editOutputs, removeTask } from '../store'
 import { cancelTask, loadMoreServerTasks, refreshQueueStats, retryTask } from '../storeBackend'
 import TaskCard from './TaskCard'
 import GenerationQueueStatus from './GenerationQueueStatus'
+import { filterTasks } from '../lib/taskFilter'
 
 export default function TaskGrid() {
   const tasks = useStore((s) => s.tasks)
@@ -34,23 +35,10 @@ export default function TaskGrid() {
   const initialSelection = useRef<string[]>([])
   const isMac = /Mac|iPod|iPhone|iPad/.test(navigator.platform)
 
-  const filteredTasks = useMemo(() => {
-    const sorted = [...tasks].sort((a, b) => b.createdAt - a.createdAt)
-    const q = searchQuery.trim().toLowerCase()
-    
-    return sorted.filter((t) => {
-      if (filterFavorite && !t.isFavorite) return false
-      if (currentProjectId === '__unassigned__' && t.projectId) return false
-      if (currentProjectId && currentProjectId !== '__unassigned__' && t.projectId !== currentProjectId) return false
-      const matchStatus = filterStatus === 'all' || t.status === filterStatus
-      if (!matchStatus) return false
-      
-      if (!q) return true
-      const prompt = (t.prompt || '').toLowerCase()
-      const paramStr = JSON.stringify(t.params).toLowerCase()
-      return prompt.includes(q) || paramStr.includes(q)
-    })
-  }, [currentProjectId, tasks, searchQuery, filterStatus, filterFavorite])
+  const filteredTasks = useMemo(
+    () => filterTasks(tasks, { currentProjectId, filterStatus, filterFavorite, searchQuery }),
+    [currentProjectId, tasks, searchQuery, filterStatus, filterFavorite],
+  )
   const hasActiveTask = tasks.some((task) => task.status === 'queued' || task.status === 'running')
 
   const TASK_PAGE_SIZE = 30
